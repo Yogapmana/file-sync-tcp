@@ -143,13 +143,16 @@ def send_file(sock: socket.socket, folder: Path, client_id: str, rel_path: str, 
             f.seek(received_size)
             print(f"[RESUME] Melanjutkan {rel_path} dari {format_size(received_size)}")
             
-        while True:
-            chunk = f.read(BUFFER_SIZE)
+        remaining = size - received_size
+        while remaining > 0:
+            chunk_size = min(BUFFER_SIZE, remaining)
+            chunk = f.read(chunk_size)
             if not chunk:
                 break
 
             send_compressed_chunk(sock, chunk)
             sent += len(chunk)
+            remaining -= len(chunk)
             print_progress(rel_path, sent, size)
 
     print()
