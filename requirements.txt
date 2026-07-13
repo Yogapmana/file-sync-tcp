@@ -1,2 +1,1 @@
-# Project ini hanya memakai library bawaan Python.
-# Minimal disarankan: Python 3.10+
+customtkinter

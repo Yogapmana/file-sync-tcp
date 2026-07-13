@@ -81,12 +81,13 @@ Konsep NOS berkaitan dengan server yang melayani permintaan client, pengelolaan 
 
 ## Kelebihan Project
 
-1. Tidak hanya mengirim file biasa, tetapi mendeteksi file baru, file berubah, dan file yang dihapus (Full Mirroring).
-2. Memiliki fitur **File Versioning & Restore** (layaknya Dropbox/Google Drive). Jika file ditimpa atau dihapus, server menyimpannya di folder `_versions`. Client bisa menarik kembali file tersebut sewaktu-waktu.
-3. Menggunakan Zlib Compression pada tingkat *chunk* (potongan data) saat pengiriman lewat socket untuk menghemat bandwidth.
-4. Memiliki fitur Resume Transfer: Jika transfer file besar terputus di tengah jalan, client bisa melanjutkannya tanpa mengulang dari 0%.
-5. Dilengkapi dengan **Web GUI Dashboard** bawaan (tanpa framework eksternal) untuk memantau aktivitas server secara *real-time*.
-6. Menggunakan TCP Socket sehingga sesuai dengan materi lapisan transport.
-7. Ada logging aktivitas (termasuk penghapusan) sehingga hasil demo lebih mudah dibuktikan.
-8. Mendukung banyak client melalui threading.
-9. Cukup berbobot untuk UAS, tetapi masih realistis untuk dibuat dan dijelaskan.
+1. **Modern Client GUI**: Client tidak perlu lagi mengetik perintah di terminal. Disediakan aplikasi Desktop `client_gui.py` berbasis *CustomTkinter* yang sangat cantik, intuitif, mendukung *Dark Mode*, dan *cross-platform*.
+2. **Keamanan SSL/TLS Tingkat Industri**: Saluran komunikasi antara Client dan Server dienkripsi penuh menggunakan Sertifikat SSL. Data tidak bisa disadap (*sniffing*) oleh peretas di jaringan lokal.
+3. Tidak hanya mengirim file biasa, tetapi mendeteksi file baru, file berubah, dan file yang dihapus (Full Mirroring).
+4. Memiliki fitur **File Versioning & Restore** (layaknya Dropbox/Google Drive). Jika file ditimpa atau dihapus, server menyimpannya di folder `_versions`. Client bisa menarik kembali file tersebut lewat menu Restore di aplikasi Desktop.
+5. Menggunakan Zlib Compression pada tingkat *chunk* (potongan data) saat pengiriman lewat socket untuk menghemat bandwidth.
+6. Memiliki fitur Resume Transfer: Jika transfer file besar terputus di tengah jalan, client bisa melanjutkannya tanpa mengulang dari 0%.
+7. Menggunakan TCP Socket murni untuk logika jaringan sehingga sesuai dengan materi lapisan transport.
+8. Ada logging aktivitas berbentuk CSV di sisi Server sehingga lalu lintas jaringan dan aktivitas sinkronisasi dapat ditelusuri (*audit*).
+9. Mendukung banyak client melalui implementasi Threading pada sisi server.
+10. Arsitekturnya berbobot untuk proyek akhir jaringan komputer, namun tetap menggunakan 100% Python tanpa Web Framework eksternal (mengandalkan GUI desktop).

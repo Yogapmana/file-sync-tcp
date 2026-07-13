@@ -3,9 +3,8 @@ import csv
 import hashlib
 import json
 import socket
+import ssl
 import threading
-import http.server
-import socketserver
 from datetime import datetime
 from pathlib import Path
 
@@ -282,237 +281,6 @@ def handle_client(sock: socket.socket, address: tuple[str, int]) -> None:
             print(f"[{now_text()}] Error dari {client_ip}:{client_port}: {exc}")
 
 
-def generate_dashboard_html() -> str:
-    total_clients = set()
-    total_files = 0
-    total_bytes = 0
-    logs = []
-    
-    if LOG_FILE.exists():
-        with LOG_FILE.open("r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                logs.append(row)
-                if row.get("status") == "SUCCESS":
-                    total_files += 1
-                    try:
-                        total_bytes += int(row.get("ukuran_byte", 0))
-                    except ValueError:
-                        pass
-                client_id = row.get("client_id")
-                if client_id:
-                    total_clients.add(client_id)
-                    
-    # Membalik urutan log agar yang terbaru di atas
-    logs.reverse()
-
-    def format_size(size: int) -> str:
-        if size < 1024: return f"{size} B"
-        if size < 1024*1024: return f"{size/1024:.2f} KB"
-        return f"{size/(1024*1024):.2f} MB"
-
-    rows_html = ""
-    for log in logs[:50]: # Ambil 50 log terbaru
-        status_color = "#4ade80" if log["status"] == "SUCCESS" else "#f87171" if log["status"] == "FAILED" else "#facc15" if log["status"] == "SKIP" else "#9ca3af"
-        if log["status"] == "DELETE": status_color = "#f43f5e"
-        
-        ukuran_str = log.get("ukuran_byte", "0")
-        try:
-            ukuran_formatted = format_size(int(ukuran_str))
-        except ValueError:
-            ukuran_formatted = "0 B"
-
-        rows_html += f'''
-        <tr>
-            <td>{log.get("waktu", "")}</td>
-            <td>{log.get("client_ip", "")}</td>
-            <td><span class="badge">{log.get("client_id", "")}</span></td>
-            <td>{log.get("file", "")}</td>
-            <td>{ukuran_formatted}</td>
-            <td style="color: {status_color}; font-weight: bold;">{log.get("status", "")}</td>
-            <td>{log.get("keterangan", "")}</td>
-        </tr>
-        '''
-        
-    html = f"""
-    <!DOCTYPE html>
-    <html lang="id">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Sync Dashboard</title>
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-        <style>
-            :root {{
-                --bg: #0f172a;
-                --card-bg: rgba(30, 41, 59, 0.7);
-                --text: #f8fafc;
-                --text-muted: #94a3b8;
-                --border: rgba(255, 255, 255, 0.1);
-                --primary: #3b82f6;
-            }}
-            body {{
-                font-family: 'Inter', sans-serif;
-                background-color: var(--bg);
-                color: var(--text);
-                margin: 0;
-                padding: 2rem;
-                background-image: radial-gradient(circle at top right, #1e1b4b, #0f172a);
-                min-height: 100vh;
-            }}
-            h1 {{
-                text-align: center;
-                font-weight: 700;
-                margin-bottom: 2rem;
-                background: linear-gradient(to right, #60a5fa, #a78bfa);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-            }}
-            .stats-container {{
-                display: flex;
-                gap: 1.5rem;
-                margin-bottom: 2rem;
-                justify-content: center;
-                flex-wrap: wrap;
-            }}
-            .stat-card {{
-                background: var(--card-bg);
-                backdrop-filter: blur(10px);
-                border: 1px solid var(--border);
-                border-radius: 1rem;
-                padding: 1.5rem 2rem;
-                min-width: 200px;
-                text-align: center;
-                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-            }}
-            .stat-card h3 {{
-                margin: 0;
-                font-size: 0.875rem;
-                color: var(--text-muted);
-                text-transform: uppercase;
-                letter-spacing: 0.05em;
-            }}
-            .stat-card .value {{
-                font-size: 2.5rem;
-                font-weight: 700;
-                margin-top: 0.5rem;
-                color: var(--text);
-            }}
-            .table-container {{
-                background: var(--card-bg);
-                backdrop-filter: blur(10px);
-                border: 1px solid var(--border);
-                border-radius: 1rem;
-                padding: 1.5rem;
-                overflow-x: auto;
-            }}
-            table {{
-                width: 100%;
-                border-collapse: collapse;
-            }}
-            th, td {{
-                padding: 1rem;
-                text-align: left;
-                border-bottom: 1px solid var(--border);
-            }}
-            th {{
-                color: var(--text-muted);
-                font-weight: 600;
-                font-size: 0.875rem;
-                text-transform: uppercase;
-            }}
-            tr:last-child td {{ border-bottom: none; }}
-            tr:hover {{ background-color: rgba(255, 255, 255, 0.02); }}
-            .badge {{
-                background: rgba(59, 130, 246, 0.2);
-                color: #93c5fd;
-                padding: 0.25rem 0.75rem;
-                border-radius: 9999px;
-                font-size: 0.75rem;
-                font-weight: 600;
-            }}
-        </style>
-        <script>
-            setTimeout(() => location.reload(), 3000);
-        </script>
-    </head>
-    <body>
-        <h1>File Sync Dashboard</h1>
-        
-        <div class="stats-container">
-            <div class="stat-card">
-                <h3>Clients Aktif</h3>
-                <div class="value">{len(total_clients)}</div>
-            </div>
-            <div class="stat-card">
-                <h3>File Tersinkronisasi</h3>
-                <div class="value">{total_files}</div>
-            </div>
-            <div class="stat-card">
-                <h3>Total Data Masuk</h3>
-                <div class="value">{format_size(total_bytes)}</div>
-            </div>
-        </div>
-
-        <div class="table-container">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Waktu</th>
-                        <th>IP Address</th>
-                        <th>Client ID</th>
-                        <th>Nama File</th>
-                        <th>Ukuran</th>
-                        <th>Status</th>
-                        <th>Keterangan</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows_html}
-                </tbody>
-            </table>
-        </div>
-    </body>
-    </html>
-    """
-    return html
-
-class DashboardHandler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == "/":
-            self.send_response(200)
-            self.send_header("Content-type", "text/html")
-            self.end_headers()
-            html = generate_dashboard_html()
-            self.wfile.write(html.encode("utf-8"))
-        else:
-            self.send_response(404)
-            self.end_headers()
-            
-    def log_message(self, format, *args):
-        # Membungkam log akses HTTP
-        pass
-
-class ReusableTCPServer(socketserver.TCPServer):
-    allow_reuse_address = True
-
-def start_web_server(port: int = 8080):
-    handler = DashboardHandler
-    max_retries = 10
-    for p in range(port, port + max_retries):
-        try:
-            httpd = ReusableTCPServer(("0.0.0.0", p), handler)
-            print(f"Web Dashboard berjalan di http://0.0.0.0:{p}")
-            httpd.serve_forever()
-            return
-        except OSError as e:
-            if e.errno == 98: # Address already in use
-                continue
-            else:
-                print(f"Gagal menyalakan Web Dashboard: {e}")
-                return
-    print(f"Gagal menyalakan Web Dashboard: Port {port} hingga {port+max_retries-1} sedang digunakan.")
-
 def start_server(host: str, port: int) -> None:
     STORAGE_DIR.mkdir(exist_ok=True)
     ensure_log_file()
@@ -525,20 +293,40 @@ def start_server(host: str, port: int) -> None:
     server_socket.bind((host, port))
     server_socket.listen(10)
 
+    # Menyiapkan SSL Context jika sertifikat tersedia
+    cert_file = Path("server.crt")
+    key_file = Path("server.key")
+    use_ssl = cert_file.exists() and key_file.exists()
+    
+    ssl_context = None
+    if use_ssl:
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ssl_context.load_cert_chain(certfile=cert_file, keyfile=key_file)
+        
     print("=" * 60)
-    print("SERVER SINKRONISASI FILE TCP")
+    print("SERVER SINKRONISASI FILE TCP (SSL/TLS SECURED)")
     print(f"Listening di {host}:{port}")
+    if use_ssl:
+        print("🔐 Keamanan SSL/TLS Aktif")
+    else:
+        print("⚠️ SSL/TLS Non-aktif (sertifikat tidak ditemukan)")
     print(f"Folder storage: {STORAGE_DIR.resolve()}")
     print(f"File log: {LOG_FILE.resolve()}")
     print("=" * 60)
 
-    # Menyalakan Web Dashboard di thread terpisah
-    web_thread = threading.Thread(target=start_web_server, args=(8080,), daemon=True)
-    web_thread.start()
-
     try:
         while True:
             client_socket, address = server_socket.accept()
+            
+            # Bungkus dengan SSL jika aktif
+            if ssl_context:
+                try:
+                    client_socket = ssl_context.wrap_socket(client_socket, server_side=True)
+                except ssl.SSLError as e:
+                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] SSL Error dari {address}: {e}")
+                    client_socket.close()
+                    continue
+            
             thread = threading.Thread(target=handle_client, args=(client_socket, address), daemon=True)
             thread.start()
 

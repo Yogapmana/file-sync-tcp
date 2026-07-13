@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import socket
+import ssl
 import time
 import re
 from pathlib import Path
@@ -247,10 +248,78 @@ def connect_to_server(host, port):
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.connect((host, port))
-        return sock
+        
+        # Amankan dengan SSL/TLS (menggunakan CERT_NONE karena self-signed certificate)
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        
+        secure_sock = context.wrap_socket(sock, server_hostname=host)
+        return secure_sock
+    except ssl.SSLError as e:
+        print(f"SSL Error: {e}\nPastikan server.py telah dinyalakan dengan SSL/TLS yang aktif.")
+        return None
     except Exception as e:
         print(f"Gagal terhubung ke server: {e}")
         return None
+
+
+def fetch_versions(server_host: str, server_port: int, client_id: str) -> list:
+    """Mengambil daftar versi file dari server."""
+    sock = connect_to_server(server_host, server_port)
+    if not sock:
+        return []
+    try:
+        send_json(sock, {"action": "LIST_VERSIONS", "client_id": client_id})
+        response = recv_json(sock)
+        if response.get("status") == "SUCCESS":
+            return response.get("versions", [])
+        return []
+    except Exception as e:
+        print(f"Error fetch versions: {e}")
+        return []
+    finally:
+        sock.close()
+
+
+def restore_file(server_host: str, server_port: int, client_id: str, filename: str, client_dir: Path) -> bool:
+    """Melakukan restore file tunggal dari server."""
+    sock = connect_to_server(server_host, server_port)
+    if not sock:
+        return False
+    try:
+        send_json(sock, {"action": "RESTORE", "client_id": client_id, "filename": filename})
+        response = recv_json(sock)
+        
+        if response.get("status") == "SUCCESS":
+            original_name = re.sub(r'_\d{8}_\d{6}', '', filename)
+            original_name = re.sub(r'_deleted', '', original_name)
+            target_path = client_dir / original_name
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            with target_path.open("wb") as f:
+                while True:
+                    chunk = recv_compressed_chunk(sock)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            
+            manifest = load_state(client_dir)
+            manifest[original_name] = {
+                "size": target_path.stat().st_size,
+                "mtime": target_path.stat().st_mtime,
+                "sha256": sha256_file(target_path)
+            }
+            save_state(client_dir, manifest)
+            return True
+        else:
+            print(f"Gagal restore: {response.get('reason')}")
+            return False
+    except Exception as e:
+        print(f"Error saat restore: {e}")
+        return False
+    finally:
+        sock.close()
 
 
 def main() -> None:
@@ -272,73 +341,23 @@ def main() -> None:
         print(f"Folder '{args.folder}' dibuat.")
 
     if args.list_versions:
-        sock = connect_to_server(args.server, args.port)
-        if not sock: return
-        try:
-            send_json(sock, {"action": "LIST_VERSIONS", "client_id": args.client_id})
-            response = recv_json(sock)
-            if response.get("status") == "SUCCESS":
-                versions = response.get("versions", [])
-                print("\n=== DAFTAR FILE BACKUP / VERSI LAMA DI SERVER ===")
-                if not versions:
-                    print("Belum ada file backup.")
-                for v in versions:
-                    size_kb = v['size'] / 1024
-                    print(f"- {v['filename']}  ({size_kb:.1f} KB, {v['mtime']})")
-                print("=================================================")
-                print("Ketik: python client.py --restore <nama_file> untuk mengembalikan file.")
-            else:
-                print("Gagal mengambil daftar versi dari server.")
-        except Exception as e:
-            print(f"Error: {e}")
-        finally:
-            sock.close()
+        versions = fetch_versions(args.server, args.port, args.client_id)
+        print("\n=== DAFTAR FILE BACKUP / VERSI LAMA DI SERVER ===")
+        if not versions:
+            print("Belum ada file backup.")
+        for v in versions:
+            size_kb = v['size'] / 1024
+            print(f"- {v['filename']}  ({size_kb:.1f} KB, {v['mtime']})")
+        print("=================================================")
+        print("Ketik: python client.py --restore <nama_file> untuk mengembalikan file.")
         return
 
     if args.restore:
-        filename = args.restore
-        sock = connect_to_server(args.server, args.port)
-        if not sock: return
-        try:
-            send_json(sock, {"action": "RESTORE", "client_id": args.client_id, "filename": filename})
-            response = recv_json(sock)
-            
-            if response.get("status") == "SUCCESS":
-                file_size = response.get("filesize", 0)
-                print(f"Menerima {filename} dari server ({file_size} bytes)...")
-                
-                # Coba bersihkan nama dari format timestamp dan 'deleted' (misal: Coba_deleted_20260713_223015.txt -> Coba.txt)
-                original_name = re.sub(r'_\d{8}_\d{6}', '', filename)
-                original_name = re.sub(r'_deleted', '', original_name)
-                
-                target_path = client_dir / original_name
-                
-                received = 0
-                with target_path.open("wb") as f:
-                    while True:
-                        chunk = recv_compressed_chunk(sock)
-                        if not chunk:
-                            break
-                        f.write(chunk)
-                        received += len(chunk)
-                
-                print(f"✅ Berhasil di-restore menjadi: {target_path.resolve()}")
-                
-                # Perbarui state.json agar tidak dianggap file baru yang perlu disinkronisasi ke server
-                manifest = load_state(client_dir)
-                manifest[original_name] = {
-                    "size": target_path.stat().st_size,
-                    "mtime": target_path.stat().st_mtime,
-                    "sha256": sha256_file(target_path)
-                }
-                save_state(client_dir, manifest)
-                
-            else:
-                print(f"❌ Gagal me-restore: {response.get('reason')}")
-        except Exception as e:
-            print(f"Error saat restore: {e}")
-        finally:
-            sock.close()
+        success = restore_file(args.server, args.port, args.client_id, args.restore, client_dir)
+        if success:
+            print(f"✅ Berhasil di-restore.")
+        else:
+            print("❌ Gagal me-restore file.")
         return
 
     if args.watch:
