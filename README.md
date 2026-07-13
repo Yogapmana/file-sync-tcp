@@ -112,6 +112,7 @@ python client.py --server 127.0.0.1 --folder client_files --client-id client01 -
 ## Catatan Tambahan (Fitur Lanjutan)
 
 Project ini kini dilengkapi dengan fitur:
+- **File Versioning & Restore (Baru!)**: File lama disimpan di `_versions` saat ditimpa atau dihapus. Cek daftar file via `python client.py --list-versions` dan kembalikan dengan `python client.py --restore "nama_file"`.
 - **Web GUI Dashboard**: Buka `http://localhost:8080` di browser Anda setelah menyalakan server untuk melihat statistik dan *log* sinkronisasi secara *real-time*.
 - **Mirroring (Hapus Sinkron)**
 - **Zlib Compression** untuk efisiensi jaringan

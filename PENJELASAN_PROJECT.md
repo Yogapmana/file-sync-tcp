@@ -82,10 +82,11 @@ Konsep NOS berkaitan dengan server yang melayani permintaan client, pengelolaan 
 ## Kelebihan Project
 
 1. Tidak hanya mengirim file biasa, tetapi mendeteksi file baru, file berubah, dan file yang dihapus (Full Mirroring).
-2. Menggunakan Zlib Compression pada tingkat *chunk* (potongan data) saat pengiriman lewat socket untuk menghemat bandwidth.
-3. Memiliki fitur Resume Transfer: Jika transfer file besar terputus di tengah jalan, client bisa melanjutkannya tanpa mengulang dari 0%.
-4. Dilengkapi dengan **Web GUI Dashboard** bawaan (tanpa framework eksternal) untuk memantau aktivitas server secara *real-time*.
-5. Menggunakan TCP Socket sehingga sesuai dengan materi lapisan transport.
-6. Ada logging aktivitas (termasuk penghapusan) sehingga hasil demo lebih mudah dibuktikan.
-7. Mendukung banyak client melalui threading.
-8. Cukup berbobot untuk UAS, tetapi masih realistis untuk dibuat dan dijelaskan.
+2. Memiliki fitur **File Versioning & Restore** (layaknya Dropbox/Google Drive). Jika file ditimpa atau dihapus, server menyimpannya di folder `_versions`. Client bisa menarik kembali file tersebut sewaktu-waktu.
+3. Menggunakan Zlib Compression pada tingkat *chunk* (potongan data) saat pengiriman lewat socket untuk menghemat bandwidth.
+4. Memiliki fitur Resume Transfer: Jika transfer file besar terputus di tengah jalan, client bisa melanjutkannya tanpa mengulang dari 0%.
+5. Dilengkapi dengan **Web GUI Dashboard** bawaan (tanpa framework eksternal) untuk memantau aktivitas server secara *real-time*.
+6. Menggunakan TCP Socket sehingga sesuai dengan materi lapisan transport.
+7. Ada logging aktivitas (termasuk penghapusan) sehingga hasil demo lebih mudah dibuktikan.
+8. Mendukung banyak client melalui threading.
+9. Cukup berbobot untuk UAS, tetapi masih realistis untuk dibuat dan dijelaskan.

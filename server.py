@@ -9,7 +9,7 @@ import socketserver
 from datetime import datetime
 from pathlib import Path
 
-from common import BUFFER_SIZE, ProtocolError, recv_exact, recv_json, safe_join, send_json, recv_compressed_chunk
+from common import BUFFER_SIZE, ProtocolError, recv_exact, recv_json, safe_join, send_json, recv_compressed_chunk, send_compressed_chunk
 
 
 STORAGE_DIR = Path("server_storage")
@@ -103,7 +103,24 @@ def receive_file(sock: socket.socket, target_path: Path, expected_size: int, rec
             received += len(chunk)
 
     if received == expected_size:
-        temp_path.replace(target_path)
+            # Implementasi File Versioning sebelum menimpa file
+            if target_path.exists():
+                versions_dir = target_path.parent / "_versions"
+                versions_dir.mkdir(exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                # Pisahkan nama dan ekstensi
+                name = target_path.stem
+                ext = target_path.suffix
+                backup_name = f"{name}_{timestamp}{ext}"
+                backup_path = versions_dir / backup_name
+                # Pindahkan file lama ke versi (hanya jika sukses didownload)
+                try:
+                    target_path.rename(backup_path)
+                except Exception as e:
+                    print(f"Gagal memindahkan {target_path.name} ke _versions: {e}")
+
+            # Timpa dengan file yang baru diunduh
+            temp_path.replace(target_path)
         
     return received, sha256.hexdigest()
 
@@ -173,6 +190,7 @@ def handle_client(sock: socket.socket, address: tuple[str, int]) -> None:
             while True:
                 message = recv_json(sock)
                 action = message.get("action")
+                client_id = message.get("client_id", "unknown_client")
 
                 if action == "UPLOAD":
                     handle_upload(sock, client_ip, message)
@@ -180,17 +198,75 @@ def handle_client(sock: socket.socket, address: tuple[str, int]) -> None:
                 elif action == "DELETE":
                     rel_path = message.get("rel_path")
                     if rel_path:
-                        client_dir = STORAGE_DIR / message.get("client_id", "unknown_client")
+                        client_dir = STORAGE_DIR / client_id
                         target_path = safe_join(client_dir, rel_path)
-                        target_path.unlink(missing_ok=True)
+                        
+                        if target_path.exists():
+                            # Memindahkan file ke folder _versions saat dihapus
+                            versions_dir = target_path.parent / "_versions"
+                            versions_dir.mkdir(exist_ok=True)
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            name = target_path.stem
+                            ext = target_path.suffix
+                            backup_name = f"{name}_deleted_{timestamp}{ext}"
+                            backup_path = versions_dir / backup_name
+                            
+                            try:
+                                target_path.rename(backup_path)
+                                write_log(client_ip, client_id, rel_path, 0, "SUCCESS", "File dihapus oleh client (pindah ke _versions)")
+                            except Exception as e:
+                                print(f"Gagal memindahkan file ke _versions: {e}")
+                                write_log(client_ip, client_id, rel_path, 0, "FAILED", f"Gagal menghapus: {str(e)}")
                         
                         manifest = load_manifest(client_dir)
                         if rel_path in manifest:
                             del manifest[rel_path]
                             save_manifest(client_dir, manifest)
                             
-                        write_log(client_ip, message.get("client_id"), rel_path, 0, "DELETE", "File dihapus di client.")
                     send_json(sock, {"status": "OK", "message": "Penghapusan diproses."})
+
+                elif action == "LIST_VERSIONS":
+                    client_dir = STORAGE_DIR / client_id
+                    versions_dir = client_dir / "_versions"
+                    versions_list = []
+                    
+                    if versions_dir.exists():
+                        for f in versions_dir.iterdir():
+                            if f.is_file():
+                                mtime_str = datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                                versions_list.append({
+                                    "filename": f.name,
+                                    "size": f.stat().st_size,
+                                    "mtime": mtime_str
+                                })
+                                
+                    versions_list.sort(key=lambda x: x["mtime"], reverse=True)
+                                
+                    send_json(sock, {"status": "SUCCESS", "versions": versions_list})
+
+                elif action == "RESTORE":
+                    filename = message.get("filename")
+                    if not filename:
+                        continue
+                        
+                    client_dir = STORAGE_DIR / client_id
+                    versions_dir = client_dir / "_versions"
+                    target_file = versions_dir / filename
+                    
+                    if not target_file.exists():
+                        send_json(sock, {"status": "FAILED", "reason": "File not found"})
+                        continue
+                        
+                    file_size = target_file.stat().st_size
+                    send_json(sock, {"status": "SUCCESS", "filesize": file_size})
+                    
+                    with target_file.open("rb") as f:
+                        while True:
+                            chunk = f.read(BUFFER_SIZE)
+                            if not chunk:
+                                break
+                            send_compressed_chunk(sock, chunk)
+                    send_compressed_chunk(sock, b"")
 
                 elif action == "FINISH":
                     send_json(sock, {"status": "OK", "message": "Sinkronisasi selesai."})

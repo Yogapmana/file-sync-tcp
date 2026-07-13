@@ -4,9 +4,10 @@ import json
 import os
 import socket
 import time
+import re
 from pathlib import Path
 
-from common import BUFFER_SIZE, recv_json, send_json, send_compressed_chunk
+from common import BUFFER_SIZE, ProtocolError, recv_json, send_exact, send_json, send_compressed_chunk, recv_compressed_chunk
 
 
 STATE_FILE = ".sync_state.json"
@@ -239,6 +240,16 @@ def sync_folder(server_host: str, server_port: int, folder: Path, client_id: str
     print("=" * 60)
 
 
+def connect_to_server(host, port):
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect((host, port))
+        return sock
+    except Exception as e:
+        print(f"Gagal terhubung ke server: {e}")
+        return None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Client sinkronisasi file menggunakan TCP Socket.")
     parser.add_argument("--server", default="127.0.0.1", help="Alamat IP server. Default: 127.0.0.1")
@@ -246,9 +257,86 @@ def main() -> None:
     parser.add_argument("--folder", default="client_files", help="Folder yang akan disinkronkan. Default: client_files")
     parser.add_argument("--client-id", default=os.getenv("COMPUTERNAME") or os.getenv("HOSTNAME") or "client01")
     parser.add_argument("--force", action="store_true", help="Kirim semua file walaupun tidak berubah.")
-    parser.add_argument("--watch", action="store_true", help="Auto sync dengan cara memonitor folder")
-    parser.add_argument("--interval", type=int, default=2, help="Interval auto sync dalam detik (default: 2)")
+    parser.add_argument("--watch", action="store_true", help="Pantau folder secara terus menerus (auto-sync)")
+    parser.add_argument("--interval", type=int, default=2, help="Interval (detik) untuk mode watch")
+    parser.add_argument("--list-versions", action="store_true", help="Lihat daftar versi/backup file lama di server")
+    parser.add_argument("--restore", type=str, metavar="NAMA_FILE", help="Restore file dari versi sebelumnya yang ada di server")
     args = parser.parse_args()
+
+    client_dir = Path(args.folder)
+    if not client_dir.exists() and not args.list_versions and not args.restore:
+        client_dir.mkdir(parents=True)
+        print(f"Folder '{args.folder}' dibuat.")
+
+    if args.list_versions:
+        sock = connect_to_server(args.server, args.port)
+        if not sock: return
+        try:
+            send_json(sock, {"action": "LIST_VERSIONS", "client_id": args.client_id})
+            response = recv_json(sock)
+            if response.get("status") == "SUCCESS":
+                versions = response.get("versions", [])
+                print("\n=== DAFTAR FILE BACKUP / VERSI LAMA DI SERVER ===")
+                if not versions:
+                    print("Belum ada file backup.")
+                for v in versions:
+                    size_kb = v['size'] / 1024
+                    print(f"- {v['filename']}  ({size_kb:.1f} KB, {v['mtime']})")
+                print("=================================================")
+                print("Ketik: python client.py --restore <nama_file> untuk mengembalikan file.")
+            else:
+                print("Gagal mengambil daftar versi dari server.")
+        except Exception as e:
+            print(f"Error: {e}")
+        finally:
+            sock.close()
+        return
+
+    if args.restore:
+        filename = args.restore
+        sock = connect_to_server(args.server, args.port)
+        if not sock: return
+        try:
+            send_json(sock, {"action": "RESTORE", "client_id": args.client_id, "filename": filename})
+            response = recv_json(sock)
+            
+            if response.get("status") == "SUCCESS":
+                file_size = response.get("filesize", 0)
+                print(f"Menerima {filename} dari server ({file_size} bytes)...")
+                
+                # Coba bersihkan nama dari format timestamp dan 'deleted' (misal: Coba_deleted_20260713_223015.txt -> Coba.txt)
+                original_name = re.sub(r'_\d{8}_\d{6}', '', filename)
+                original_name = re.sub(r'_deleted', '', original_name)
+                
+                target_path = client_dir / original_name
+                
+                received = 0
+                with target_path.open("wb") as f:
+                    while True:
+                        chunk = recv_compressed_chunk(sock)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        received += len(chunk)
+                
+                print(f"✅ Berhasil di-restore menjadi: {target_path.resolve()}")
+                
+                # Perbarui state.json agar tidak dianggap file baru yang perlu disinkronisasi ke server
+                manifest = load_state(client_dir)
+                manifest[original_name] = {
+                    "size": target_path.stat().st_size,
+                    "mtime": target_path.stat().st_mtime,
+                    "sha256": sha256_file(target_path)
+                }
+                save_state(client_dir, manifest)
+                
+            else:
+                print(f"❌ Gagal me-restore: {response.get('reason')}")
+        except Exception as e:
+            print(f"Error saat restore: {e}")
+        finally:
+            sock.close()
+        return
 
     if args.watch:
         print(f"Memulai auto-sync setiap {args.interval} detik. Tekan Ctrl+C untuk berhenti.")
