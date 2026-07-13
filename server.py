@@ -165,7 +165,7 @@ def handle_upload(sock: socket.socket, client_ip: str, message: dict) -> None:
         return
 
     if actual_hash != expected_hash:
-        target_path.unlink(missing_ok=True)
+        temp_path.unlink(missing_ok=True)
         send_json(sock, {"status": "ERROR", "message": "Hash file tidak sesuai. File ditolak."})
         write_log(client_ip, client_id, rel_path, size, "FAILED", "Hash file tidak sesuai.")
         return

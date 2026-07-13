@@ -7,7 +7,7 @@ import time
 import re
 from pathlib import Path
 
-from common import BUFFER_SIZE, ProtocolError, recv_json, send_exact, send_json, send_compressed_chunk, recv_compressed_chunk
+from common import BUFFER_SIZE, ProtocolError, recv_json, send_json, send_compressed_chunk, recv_compressed_chunk
 
 
 STATE_FILE = ".sync_state.json"
