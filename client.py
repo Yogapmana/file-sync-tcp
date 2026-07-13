@@ -206,8 +206,12 @@ def sync_folder(server_host: str, server_port: int, folder: Path, client_id: str
     failed_count = 0
     delete_count = 0
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.connect((server_host, server_port))
+    sock = connect_to_server(server_host, server_port)
+    if not sock:
+        print("Sinkronisasi dibatalkan karena gagal terhubung ke server.")
+        return
+        
+    with sock:
         
         for rel_path in changed_files["delete"]:
             send_json(sock, {"action": "DELETE", "client_id": client_id, "rel_path": rel_path})
