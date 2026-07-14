@@ -465,13 +465,6 @@ def restore_file(server_host: str, server_port: int, client_id: str, filename: s
                         break
                     f.write(chunk)
             
-            manifest = load_state(client_dir)
-            manifest[original_name] = {
-                "size": target_path.stat().st_size,
-                "mtime": target_path.stat().st_mtime,
-                "sha256": sha256_file(target_path)
-            }
-            save_state(client_dir, manifest)
             return True
         else:
             print(f"Gagal restore: {response.get('reason')}")
