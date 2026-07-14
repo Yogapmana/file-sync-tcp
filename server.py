@@ -2,11 +2,22 @@ import argparse
 import csv
 import hashlib
 import json
+import logging
 import socket
 import ssl
-import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("logs/server.log", encoding="utf-8")
+    ]
+)
 
 from common import BUFFER_SIZE, ProtocolError, recv_exact, recv_json, safe_join, send_json, recv_compressed_chunk, send_compressed_chunk
 
@@ -136,8 +147,8 @@ def receive_file(sock: socket.socket, target_path: Path, expected_size: int, rec
                 # Pindahkan file lama ke versi (hanya jika sukses didownload)
                 try:
                     target_path.rename(backup_path)
-                except Exception as e:
-                    print(f"Gagal memindahkan {target_path.name} ke _versions: {e}")
+                except OSError as e:
+                    logging.error(f"Gagal memindahkan {target_path.name} ke _versions: {e}")
 
             # Timpa dengan file yang baru diunduh
             temp_path.replace(target_path)
@@ -203,7 +214,7 @@ def handle_upload(sock: socket.socket, client_ip: str, message: dict) -> None:
 
 def handle_client(sock: socket.socket, address: tuple[str, int]) -> None:
     client_ip, client_port = address
-    print(f"[{now_text()}] Client terhubung: {client_ip}:{client_port}")
+    logging.info(f"Client terhubung: {client_ip}:{client_port}")
 
     with sock:
         try:
@@ -239,8 +250,8 @@ def handle_client(sock: socket.socket, address: tuple[str, int]) -> None:
                             try:
                                 target_path.rename(backup_path)
                                 write_log(client_ip, client_id, rel_path, 0, "SUCCESS", "File dihapus oleh client (pindah ke _versions)")
-                            except Exception as e:
-                                print(f"Gagal memindahkan file ke _versions: {e}")
+                            except OSError as e:
+                                logging.error(f"Gagal memindahkan file ke _versions: {e}")
                                 write_log(client_ip, client_id, rel_path, 0, "FAILED", f"Gagal menghapus: {str(e)}")
                         
                         manifest = load_manifest(client_dir)
@@ -318,16 +329,20 @@ def handle_client(sock: socket.socket, address: tuple[str, int]) -> None:
 
                 elif action == "FINISH":
                     send_json(sock, {"status": "OK", "message": "Sinkronisasi selesai."})
-                    print(f"[{now_text()}] Sinkronisasi selesai dari {client_ip}:{client_port}")
+                    logging.info(f"Sinkronisasi selesai dari {client_ip}:{client_port}")
                     break
 
                 else:
                     send_json(sock, {"status": "ERROR", "message": "Action tidak dikenali."})
 
+        except ssl.SSLError as exc:
+            logging.error(f"SSL bermasalah dari {client_ip}:{client_port}: {exc}")
         except (ConnectionError, ProtocolError) as exc:
-            print(f"[{now_text()}] Koneksi bermasalah dari {client_ip}:{client_port}: {exc}")
+            logging.warning(f"Koneksi terputus dari {client_ip}:{client_port}: {exc}")
+        except json.JSONDecodeError as exc:
+            logging.error(f"Format JSON salah dari {client_ip}:{client_port}: {exc}")
         except Exception as exc:
-            print(f"[{now_text()}] Error dari {client_ip}:{client_port}: {exc}")
+            logging.error(f"Error tidak terduga dari {client_ip}:{client_port}: {exc}", exc_info=True)
 
 
 def start_server(host: str, port: int) -> None:
@@ -352,35 +367,35 @@ def start_server(host: str, port: int) -> None:
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ssl_context.load_cert_chain(certfile=cert_file, keyfile=key_file)
         
-    print("=" * 60)
-    print("SERVER SINKRONISASI FILE TCP (SSL/TLS SECURED)")
-    print(f"Listening di {host}:{port}")
+    logging.info("=" * 60)
+    logging.info("SERVER SINKRONISASI FILE TCP (SSL/TLS SECURED)")
+    logging.info(f"Listening di {host}:{port}")
     if use_ssl:
-        print("🔐 Keamanan SSL/TLS Aktif")
+        logging.info("🔐 Keamanan SSL/TLS Aktif")
     else:
-        print("⚠️ SSL/TLS Non-aktif (sertifikat tidak ditemukan)")
-    print(f"Folder storage: {STORAGE_DIR.resolve()}")
-    print(f"File log: {LOG_FILE.resolve()}")
-    print("=" * 60)
+        logging.warning("⚠️ SSL/TLS Non-aktif (sertifikat tidak ditemukan)")
+    logging.info(f"Folder storage: {STORAGE_DIR.resolve()}")
+    logging.info(f"File log: {LOG_FILE.resolve()}")
+    logging.info("=" * 60)
 
     try:
-        while True:
-            client_socket, address = server_socket.accept()
-            
-            # Bungkus dengan SSL jika aktif
-            if ssl_context:
-                try:
-                    client_socket = ssl_context.wrap_socket(client_socket, server_side=True)
-                except ssl.SSLError as e:
-                    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] SSL Error dari {address}: {e}")
-                    client_socket.close()
-                    continue
-            
-            thread = threading.Thread(target=handle_client, args=(client_socket, address), daemon=True)
-            thread.start()
+        with ThreadPoolExecutor(max_workers=100) as executor:
+            while True:
+                client_socket, address = server_socket.accept()
+                
+                # Bungkus dengan SSL jika aktif
+                if ssl_context:
+                    try:
+                        client_socket = ssl_context.wrap_socket(client_socket, server_side=True)
+                    except ssl.SSLError as e:
+                        logging.error(f"SSL Error dari {address}: {e}")
+                        client_socket.close()
+                        continue
+                
+                executor.submit(handle_client, client_socket, address)
 
     except KeyboardInterrupt:
-        print("\nServer dihentikan.")
+        logging.info("Server dihentikan.")
     finally:
         server_socket.close()
 

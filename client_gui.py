@@ -7,8 +7,10 @@ import os
 import threading
 import sys
 import platform
+# pyrefly: ignore [missing-import]
 import pystray
 from PIL import Image, ImageDraw
+import logging
 
 # Import fungsi-fungsi jaringan dari client.py yang sudah di-refactor
 from client import sync_folder, fetch_versions, restore_file
@@ -16,20 +18,19 @@ from client import sync_folder, fetch_versions, restore_file
 ctk.set_appearance_mode("System")  # Otomatis mengikuti tema OS (Dark/Light)
 ctk.set_default_color_theme("blue")  # Tema warna biru
 
-class TextRedirector:
-    """Class kecil untuk membelokkan output terminal (print) ke dalam Textbox GUI."""
+class GUILoggingHandler(logging.Handler):
+    """Handler logging kustom untuk menampilkan log di Textbox GUI."""
     def __init__(self, widget):
+        super().__init__()
         self.widget = widget
 
-    def write(self, str_data):
-        self.widget.after(0, self._insert_text, str_data)
+    def emit(self, record):
+        msg = self.format(record) + "\n"
+        self.widget.after(0, self._insert_text, msg)
 
-    def _insert_text(self, str_data):
-        self.widget.insert(tk.END, str_data)
+    def _insert_text(self, msg):
+        self.widget.insert(tk.END, msg)
         self.widget.see(tk.END) # Scroll ke bawah otomatis
-
-    def flush(self):
-        pass
 
 class ClientGUI(ctk.CTk):
     def __init__(self):
@@ -132,11 +133,18 @@ class ClientGUI(ctk.CTk):
         self.console = ctk.CTkTextbox(tab, height=340, font=("monospace", 12), corner_radius=0)
         self.console.grid(row=2, column=0, columnspan=2, padx=20, pady=10, sticky="nsew")
         
-        # Membelokkan output terminal asli ke Textbox
-        sys.stdout = TextRedirector(self.console)
-        sys.stderr = TextRedirector(self.console)
-        print("Selamat datang di File Sync TCP (Mode GUI)!")
-        print("Silakan buka folder, masukkan file, lalu tekan 'Mulai Sinkronisasi'.")
+        # Konfigurasi Logging agar masuk ke GUI
+        gui_handler = GUILoggingHandler(self.console)
+        gui_handler.setFormatter(logging.Formatter('[%(asctime)s] %(message)s', datefmt='%H:%M:%S'))
+        
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.INFO)
+        # Hapus handler sebelumnya jika ada, agar tidak ganda
+        for handler in root_logger.handlers[:]:
+            root_logger.removeHandler(handler)
+        root_logger.addHandler(gui_handler)
+        logging.info("Selamat datang di File Sync TCP (Mode GUI)!")
+        logging.info("Silakan buka folder, masukkan file, lalu tekan 'Mulai Sinkronisasi'.")
         
     def setup_restore_tab(self):
         tab = self.tabview.tab("♻️ Pusat Restore File")
@@ -205,7 +213,7 @@ class ClientGUI(ctk.CTk):
         if getattr(self, "is_syncing", False):
             self.is_syncing = False
             self.btn_sync.configure(text="🚀 Mulai Sinkronisasi\n(Kirim ke Server)", fg_color="#10b981", hover_color="#059669")
-            print("\nAuto-Sync dihentikan.")
+            logging.info("Auto-Sync dihentikan.")
             return
 
         self.console.delete("1.0", tk.END) # Bersihkan terminal
@@ -226,7 +234,7 @@ class ClientGUI(ctk.CTk):
 
         if is_auto:
             self.btn_sync.configure(text="⏹️ Hentikan Auto-Sync", fg_color="#ef4444", hover_color="#b91c1c")
-            print("Memulai Auto-Sync... Tekan tombol merah untuk berhenti.")
+            logging.info("Memulai Auto-Sync... Tekan tombol merah untuk berhenti.")
         else:
             self.btn_sync.configure(state="disabled", text="Sinkronisasi Berjalan...")
 
@@ -236,7 +244,7 @@ class ClientGUI(ctk.CTk):
                 try:
                     sync_folder(host, port, folder, client_id, force=False, watch_mode=is_auto)
                 except Exception as e:
-                    print(f"Error saat sinkronisasi: {e}")
+                    logging.error(f"Error saat sinkronisasi: {e}")
                 
                 if not is_auto:
                     self.is_syncing = False
@@ -297,15 +305,15 @@ class ClientGUI(ctk.CTk):
             
             # Pindah ke tab sync agar user bisa lihat log download
             self.tabview.set("🔄 Dashboard Sinkronisasi")
-            print("="*40)
-            print(f"Mulai me-restore: {filename}...")
+            logging.info("="*40)
+            logging.info(f"Mulai me-restore: {filename}...")
             
             success = restore_file(host, port, client_id, filename, folder)
             if success:
-                print(f"✅ Berhasil me-restore file!")
+                logging.info(f"✅ Berhasil me-restore file!")
             else:
-                print(f"❌ Gagal me-restore file.")
-            print("="*40)
+                logging.error(f"❌ Gagal me-restore file.")
+            logging.info("="*40)
             self.btn_restore.after(0, lambda: self.btn_restore.configure(state="normal", text="⬇️ Restore File Terpilih"))
             
         threading.Thread(target=restore_t, daemon=True).start()

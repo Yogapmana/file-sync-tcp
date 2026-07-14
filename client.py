@@ -2,12 +2,20 @@ import argparse
 import fnmatch
 import hashlib
 import json
+import logging
 import os
 import socket
 import ssl
+import sys
 import time
-import re
+from datetime import datetime
 from pathlib import Path
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(message)s',
+    datefmt='%H:%M:%S'
+)
 
 from common import BUFFER_SIZE, ProtocolError, recv_json, send_json, send_compressed_chunk, recv_compressed_chunk
 
@@ -141,7 +149,7 @@ def get_changed_files(current_manifest: dict, previous_state: dict, server_manif
             
         elif modified_locally and deleted_server:
             if (now - local_info["mtime"]) < COOLDOWN_SECONDS:
-                print(f"[COOLDOWN] Menunda sinkronisasi '{rel_path}' karena masih diedit...")
+                logging.info(f"[COOLDOWN] Menunda sinkronisasi '{rel_path}' karena masih diedit...")
                 cooldown_files.append(rel_path)
             else:
                 changed["upload"].append(rel_path)
@@ -151,7 +159,7 @@ def get_changed_files(current_manifest: dict, previous_state: dict, server_manif
             
         elif modified_locally:
             if (now - local_info["mtime"]) < COOLDOWN_SECONDS:
-                print(f"[COOLDOWN] Menunda sinkronisasi '{rel_path}' karena masih diedit...")
+                logging.info(f"[COOLDOWN] Menunda sinkronisasi '{rel_path}' karena masih diedit...")
                 cooldown_files.append(rel_path)
             else:
                 changed["upload"].append(rel_path)
@@ -191,7 +199,7 @@ def download_file(sock: socket.socket, folder: Path, client_id: str, rel_path: s
     response = recv_json(sock)
     
     if response.get("status") != "SUCCESS":
-        print(f"[GAGAL] Download {rel_path} - {response.get('reason')}")
+        logging.error(f"[GAGAL] Download {rel_path} - {response.get('reason')}")
         return "FAILED"
         
     size = response.get("filesize", 0)
@@ -211,16 +219,16 @@ def download_file(sock: socket.socket, folder: Path, client_id: str, rel_path: s
             received += len(chunk)
             print_progress(rel_path, received, size)
             
-    print()
+    logging.info()
     if received == size:
         tmp_path.replace(full_path)
         elapsed = max(time.time() - start_time, 0.0001)
         speed = received / elapsed
-        print(f"[OK] {rel_path} berhasil diunduh. Kecepatan: {format_size(int(speed))}/s")
+        logging.info(f"[OK] {rel_path} berhasil diunduh. Kecepatan: {format_size(int(speed))}/s")
         return "OK"
     else:
         tmp_path.unlink(missing_ok=True)
-        print(f"[GAGAL] {rel_path} ukuran tidak sesuai (Diterima: {received}/{size})")
+        logging.error(f"[GAGAL] {rel_path} ukuran tidak sesuai (Diterima: {received}/{size})")
         return "FAILED"
 
 def send_file(sock: socket.socket, folder: Path, client_id: str, rel_path: str, info: dict) -> str:
@@ -240,11 +248,11 @@ def send_file(sock: socket.socket, folder: Path, client_id: str, rel_path: str, 
     response = recv_json(sock)
 
     if response.get("status") == "SKIP":
-        print(f"[SKIP] {rel_path} - {response.get('message')}")
+        logging.info(f"[SKIP] {rel_path} - {response.get('message')}")
         return "SKIP"
 
     if response.get("status") != "READY":
-        print(f"[GAGAL] {rel_path} - {response.get('message')}")
+        logging.error(f"[GAGAL] {rel_path} - {response.get('message')}")
         return "FAILED"
 
     received_size = response.get("received_size", 0)
@@ -254,7 +262,7 @@ def send_file(sock: socket.socket, folder: Path, client_id: str, rel_path: str, 
     with full_path.open("rb") as f:
         if received_size > 0:
             f.seek(received_size)
-            print(f"[RESUME] Melanjutkan {rel_path} dari {format_size(received_size)}")
+            logging.info(f"[RESUME] Melanjutkan {rel_path} dari {format_size(received_size)}")
             
         remaining = size - received_size
         while remaining > 0:
@@ -268,17 +276,17 @@ def send_file(sock: socket.socket, folder: Path, client_id: str, rel_path: str, 
             remaining -= len(chunk)
             print_progress(rel_path, sent, size)
 
-    print()
+    logging.info()
 
     final_response = recv_json(sock)
     elapsed = max(time.time() - start_time, 0.0001)
     speed = sent / elapsed
 
     if final_response.get("status") == "OK":
-        print(f"[OK] {rel_path} berhasil dikirim. Kecepatan: {format_size(int(speed))}/s")
+        logging.info(f"[OK] {rel_path} berhasil dikirim. Kecepatan: {format_size(int(speed))}/s")
         return "OK"
 
-    print(f"[GAGAL] {rel_path} - {final_response.get('message')}")
+    logging.error(f"[GAGAL] {rel_path} - {final_response.get('message')}")
     return "FAILED"
 
 
@@ -290,7 +298,7 @@ def sync_folder(server_host: str, server_port: int, folder: Path, client_id: str
 
     sock = connect_to_server(server_host, server_port)
     if not sock:
-        print("Sinkronisasi dibatalkan karena gagal terhubung ke server.")
+        logging.info("Sinkronisasi dibatalkan karena gagal terhubung ke server.")
         return
 
     with sock:
@@ -299,7 +307,7 @@ def sync_folder(server_host: str, server_port: int, folder: Path, client_id: str
         if resp.get("status") == "SUCCESS":
             server_manifest = resp.get("manifest", {})
         else:
-            print("Gagal mengambil manifest dari server.")
+            logging.info("Gagal mengambil manifest dari server.")
             server_manifest = {}
             
         previous_state = load_state(folder)
@@ -315,7 +323,7 @@ def sync_folder(server_host: str, server_port: int, folder: Path, client_id: str
                 conflict_name = f"{full_path.stem}_conflict_{timestamp}{full_path.suffix}"
                 conflict_path = full_path.with_name(conflict_name)
                 full_path.rename(conflict_path)
-                print(f"[CONFLICT] Menyimpan file lokal ke {conflict_name}")
+                logging.warning(f"[CONFLICT] Menyimpan file lokal ke {conflict_name}")
             changed_files["download"].append(rel_path)
 
         total_changes = len(changed_files["upload"]) + len(changed_files["delete_remote"]) + len(changed_files["download"]) + len(changed_files["delete_local"])
@@ -324,15 +332,15 @@ def sync_folder(server_host: str, server_port: int, folder: Path, client_id: str
             recv_json(sock)
             return
 
-        print("=" * 60)
-        print("CLIENT SINKRONISASI FILE TCP (TWO-WAY SYNC)")
-        print(f"Server: {server_host}:{server_port}")
-        print(f"Folder client: {folder.resolve()}")
-        print(f"Client ID: {client_id}")
-        print("=" * 60)
+        logging.info("=" * 60)
+        logging.info("CLIENT SINKRONISASI FILE TCP (TWO-WAY SYNC)")
+        logging.info(f"Server: {server_host}:{server_port}")
+        logging.info(f"Folder client: {folder.resolve()}")
+        logging.info(f"Client ID: {client_id}")
+        logging.info("=" * 60)
         
         if total_changes == 0:
-            print("Tidak ada file baru, diubah, atau dihapus. Sinkronisasi tidak diperlukan.")
+            logging.info("Tidak ada file baru, diubah, atau dihapus. Sinkronisasi tidak diperlukan.")
             send_json(sock, {"action": "FINISH", "client_id": client_id})
             recv_json(sock)
             return
@@ -349,7 +357,7 @@ def sync_folder(server_host: str, server_port: int, folder: Path, client_id: str
             full_path = folder / rel_path
             if full_path.exists():
                 full_path.unlink()
-                print(f"[DELETE LOKAL] {rel_path} berhasil dihapus.")
+                logging.info(f"[DELETE LOKAL] {rel_path} berhasil dihapus.")
                 delete_local_count += 1
                 
         # Eksekusi Delete Remote
@@ -357,10 +365,10 @@ def sync_folder(server_host: str, server_port: int, folder: Path, client_id: str
             send_json(sock, {"action": "DELETE", "client_id": client_id, "rel_path": rel_path})
             r = recv_json(sock)
             if r.get("status") == "OK":
-                print(f"[DELETE REMOTE] {rel_path} berhasil dihapus dari server.")
+                logging.info(f"[DELETE REMOTE] {rel_path} berhasil dihapus dari server.")
                 delete_remote_count += 1
             else:
-                print(f"[GAGAL] Menghapus remote {rel_path}: {r.get('message')}")
+                logging.error(f"[GAGAL] Menghapus remote {rel_path}: {r.get('message')}")
                 
         # Eksekusi Upload
         for rel_path in changed_files["upload"]:
@@ -382,7 +390,7 @@ def sync_folder(server_host: str, server_port: int, folder: Path, client_id: str
 
         send_json(sock, {"action": "FINISH", "client_id": client_id})
         finish_response = recv_json(sock)
-        print(f"Server: {finish_response.get('message')}")
+        logging.info(f"Server: {finish_response.get('message')}")
 
     # Update State
     final_manifest = scan_folder(folder)
@@ -392,36 +400,44 @@ def sync_folder(server_host: str, server_port: int, folder: Path, client_id: str
             
     save_state(folder, final_manifest)
 
-    print("=" * 60)
-    print("RINGKASAN SINKRONISASI")
-    print(f"Diunggah      : {success_count}")
-    print(f"Diunduh       : {download_count}")
-    print(f"Dihapus Lokal : {delete_local_count}")
-    print(f"Dihapus Server: {delete_remote_count}")
-    print(f"Dilewati      : {skip_count}")
-    print(f"Gagal         : {failed_count}")
-    print("=" * 60)
+    logging.info("=" * 60)
+    logging.info("RINGKASAN SINKRONISASI")
+    logging.info(f"Diunggah      : {success_count}")
+    logging.info(f"Diunduh       : {download_count}")
+    logging.info(f"Dihapus Lokal : {delete_local_count}")
+    logging.info(f"Dihapus Server: {delete_remote_count}")
+    logging.info(f"Dilewati      : {skip_count}")
+    logging.info(f"Gagal         : {failed_count}")
+    logging.info("=" * 60)
 
-    print(f"Total file lokal : {len(final_manifest)}")
-    print(f"File diupload    : {len(changed_files['upload'])}")
-    print(f"File dihapus     : {len(changed_files['delete_local']) + len(changed_files['delete_remote'])}")
+    logging.info(f"Total file lokal : {len(final_manifest)}")
+    logging.info(f"File diupload    : {len(changed_files['upload'])}")
+    logging.info(f"File dihapus     : {len(changed_files['delete_local']) + len(changed_files['delete_remote'])}")
 def connect_to_server(host, port):
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.connect((host, port))
         
-        # Amankan dengan SSL/TLS (menggunakan CERT_NONE karena self-signed certificate)
+        # Amankan dengan SSL/TLS
         context = ssl.create_default_context()
         context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+        # Memuat sertifikat server untuk validasi (Best Practice)
+        if Path("server.crt").exists():
+            context.load_verify_locations("server.crt")
+            context.verify_mode = ssl.CERT_REQUIRED
+        else:
+            context.verify_mode = ssl.CERT_NONE
         
         secure_sock = context.wrap_socket(sock, server_hostname=host)
         return secure_sock
     except ssl.SSLError as e:
-        print(f"SSL Error: {e}\nPastikan server.py telah dinyalakan dengan SSL/TLS yang aktif.")
+        logging.error(f"SSL Error: {e}\nPastikan server.py telah dinyalakan dengan SSL/TLS yang aktif, dan server.crt valid.")
         return None
-    except Exception as e:
-        print(f"Gagal terhubung ke server: {e}")
+    except ConnectionRefusedError as e:
+        logging.error(f"Koneksi ditolak oleh server: {e}")
+        return None
+    except OSError as e:
+        logging.error(f"Gagal terhubung ke server: {e}")
         return None
 
 
@@ -437,7 +453,7 @@ def fetch_versions(server_host: str, server_port: int, client_id: str) -> list:
             return response.get("versions", [])
         return []
     except Exception as e:
-        print(f"Error fetch versions: {e}")
+        logging.error(f"Error fetch versions: {e}")
         return []
     finally:
         sock.close()
@@ -467,10 +483,10 @@ def restore_file(server_host: str, server_port: int, client_id: str, filename: s
             
             return True
         else:
-            print(f"Gagal restore: {response.get('reason')}")
+            logging.info(f"Gagal restore: {response.get('reason')}")
             return False
     except Exception as e:
-        print(f"Error saat restore: {e}")
+        logging.error(f"Error saat restore: {e}")
         return False
     finally:
         sock.close()
@@ -492,30 +508,30 @@ def main() -> None:
     client_dir = Path(args.folder)
     if not client_dir.exists() and not args.list_versions and not args.restore:
         client_dir.mkdir(parents=True)
-        print(f"Folder '{args.folder}' dibuat.")
+        logging.info(f"Folder '{args.folder}' dibuat.")
 
     if args.list_versions:
         versions = fetch_versions(args.server, args.port, args.client_id)
-        print("\n=== DAFTAR FILE BACKUP / VERSI LAMA DI SERVER ===")
+        logging.info("\n=== DAFTAR FILE BACKUP / VERSI LAMA DI SERVER ===")
         if not versions:
-            print("Belum ada file backup.")
+            logging.info("Belum ada file backup.")
         for v in versions:
             size_kb = v['size'] / 1024
-            print(f"- {v['filename']}  ({size_kb:.1f} KB, {v['mtime']})")
-        print("=================================================")
-        print("Ketik: python client.py --restore <nama_file> untuk mengembalikan file.")
+            logging.info(f"- {v['filename']}  ({size_kb:.1f} KB, {v['mtime']})")
+        logging.info("=================================================")
+        logging.info("Ketik: python client.py --restore <nama_file> untuk mengembalikan file.")
         return
 
     if args.restore:
         success = restore_file(args.server, args.port, args.client_id, args.restore, client_dir)
         if success:
-            print(f"✅ Berhasil di-restore.")
+            logging.info(f"✅ Berhasil di-restore.")
         else:
-            print("❌ Gagal me-restore file.")
+            logging.info("❌ Gagal me-restore file.")
         return
 
     if args.watch:
-        print(f"Memulai auto-sync setiap {args.interval} detik. Tekan Ctrl+C untuk berhenti.")
+        logging.info(f"Memulai auto-sync setiap {args.interval} detik. Tekan Ctrl+C untuk berhenti.")
         try:
             while True:
                 sync_folder(
@@ -528,7 +544,7 @@ def main() -> None:
                 )
                 time.sleep(args.interval)
         except KeyboardInterrupt:
-            print("\nAuto-sync dihentikan.")
+            logging.info("\nAuto-sync dihentikan.")
     else:
         sync_folder(
             server_host=args.server,
