@@ -201,12 +201,13 @@ class ClientGUI(ctk.CTk):
         """Membuka folder client_files menggunakan OS Default File Explorer."""
         folder_path = Path("client_files")
         folder_path.mkdir(exist_ok=True)
+        import subprocess
         if platform.system() == "Windows":
             os.startfile(folder_path)
         elif platform.system() == "Darwin":
-            os.system(f"open {folder_path}")
+            subprocess.Popen(["open", str(folder_path)])
         else:
-            os.system(f"xdg-open {folder_path}")
+            subprocess.Popen(["xdg-open", str(folder_path)])
             
     def run_sync(self):
         # Jika sedang auto-sync, klik tombol ini akan menghentikannya
