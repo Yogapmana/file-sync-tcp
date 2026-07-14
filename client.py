@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import socket
 import ssl
 import sys
@@ -429,6 +430,16 @@ def connect_to_server(host, port):
             context.verify_mode = ssl.CERT_NONE
         
         secure_sock = context.wrap_socket(sock, server_hostname=host)
+        
+        # Auto-download sertifikat jika belum ada (Trust on First Use)
+        if not Path("server.crt").exists():
+            der_cert = secure_sock.getpeercert(binary_form=True)
+            if der_cert:
+                pem_cert = ssl.DER_cert_to_PEM_cert(der_cert)
+                with open("server.crt", "w", encoding="utf-8") as f:
+                    f.write(pem_cert)
+                logging.info("Sertifikat server (server.crt) berhasil diunduh dan disimpan (Trust on First Use).")
+                
         return secure_sock
     except ssl.SSLError as e:
         logging.error(f"SSL Error: {e}\nPastikan server.py telah dinyalakan dengan SSL/TLS yang aktif, dan server.crt valid.")
