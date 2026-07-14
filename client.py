@@ -219,7 +219,7 @@ def download_file(sock: socket.socket, folder: Path, client_id: str, rel_path: s
             received += len(chunk)
             print_progress(rel_path, received, size)
             
-    logging.info()
+    logging.info("")
     if received == size:
         tmp_path.replace(full_path)
         elapsed = max(time.time() - start_time, 0.0001)
@@ -276,7 +276,7 @@ def send_file(sock: socket.socket, folder: Path, client_id: str, rel_path: str, 
             remaining -= len(chunk)
             print_progress(rel_path, sent, size)
 
-    logging.info()
+    logging.info("")
 
     final_response = recv_json(sock)
     elapsed = max(time.time() - start_time, 0.0001)
