@@ -53,21 +53,42 @@ def write_log(client_ip: str, client_id: str, filename: str, size: int, status: 
         ])
 
 
+def sha256_file(path: Path) -> str:
+    import hashlib
+    sha256 = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(4096)
+            if not chunk:
+                break
+            sha256.update(chunk)
+    return sha256.hexdigest()
+
 def load_manifest(client_dir: Path) -> dict:
-    manifest_path = client_dir / ".server_manifest.json"
-
-    if not manifest_path.exists():
-        return {}
-
-    try:
-        return json.loads(manifest_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
+    manifest = {}
+    if not client_dir.exists():
+        return manifest
+        
+    for path in client_dir.rglob("*"):
+        if not path.is_file():
+            continue
+            
+        # Abaikan file . (seperti .server_manifest.json) dan folder _versions
+        if path.name.startswith(".") or "_versions" in path.parts:
+            continue
+            
+        rel_path = path.relative_to(client_dir).as_posix()
+        
+        manifest[rel_path] = {
+            "size": path.stat().st_size,
+            "mtime": path.stat().st_mtime,
+            "sha256": sha256_file(path)
+        }
+    return manifest
 
 
 def save_manifest(client_dir: Path, manifest: dict) -> None:
-    manifest_path = client_dir / ".server_manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    pass  # Tidak perlu lagi menyimpan manifest JSON karena sekarang dibaca dinamis
 
 
 def receive_file(sock: socket.socket, target_path: Path, expected_size: int, received: int = 0) -> tuple[int, str]:

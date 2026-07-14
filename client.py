@@ -402,61 +402,9 @@ def sync_folder(server_host: str, server_port: int, folder: Path, client_id: str
     print(f"Gagal         : {failed_count}")
     print("=" * 60)
 
-    print(f"Total file di folder: {len(current_manifest)}")
-    print(f"File diupload: {len(changed_files['upload'])}")
-    print(f"File dihapus: {len(changed_files['delete'])}")
-
-    if total_changes == 0:
-        print("Tidak ada file baru, diubah, atau dihapus. Sinkronisasi tidak diperlukan.")
-        return
-
-    success_count = 0
-    skip_count = 0
-    failed_count = 0
-    delete_count = 0
-
-    sock = connect_to_server(server_host, server_port)
-    if not sock:
-        print("Sinkronisasi dibatalkan karena gagal terhubung ke server.")
-        return
-        
-    with sock:
-        
-        for rel_path in changed_files["delete"]:
-            send_json(sock, {"action": "DELETE", "client_id": client_id, "rel_path": rel_path})
-            resp = recv_json(sock)
-            if resp.get("status") == "OK":
-                print(f"[DELETE] {rel_path} berhasil dihapus dari server.")
-                delete_count += 1
-            else:
-                print(f"[GAGAL] Gagal menghapus {rel_path}: {resp.get('message')}")
-
-        for rel_path in changed_files["upload"]:
-            result = send_file(sock, folder, client_id, rel_path, current_manifest[rel_path])
-
-            if result == "OK":
-                success_count += 1
-            elif result == "SKIP":
-                skip_count += 1
-            else:
-                failed_count += 1
-
-        send_json(sock, {"action": "FINISH", "client_id": client_id})
-        finish_response = recv_json(sock)
-        print(f"Server: {finish_response.get('message')}")
-
-    # State tetap disimpan supaya file yang tidak berubah tidak dikirim ulang.
-    save_state(folder, next_state)
-
-    print("=" * 60)
-    print("RINGKASAN SINKRONISASI")
-    print(f"Diunggah: {success_count}")
-    print(f"Dihapus : {delete_count}")
-    print(f"Dilewati: {skip_count}")
-    print(f"Gagal   : {failed_count}")
-    print("=" * 60)
-
-
+    print(f"Total file lokal : {len(final_manifest)}")
+    print(f"File diupload    : {len(changed_files['upload'])}")
+    print(f"File dihapus     : {len(changed_files['delete_local']) + len(changed_files['delete_remote'])}")
 def connect_to_server(host, port):
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
