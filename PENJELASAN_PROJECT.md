@@ -2,47 +2,44 @@
 
 ## Judul
 
-Sistem Sinkronisasi File Client-Server Menggunakan TCP Socket dengan Deteksi Perubahan File dan Logging Aktivitas
+Sistem Sinkronisasi File Dua Arah (*Two-Way Sync*) Klien-Server Menggunakan TCP Socket Aman (SSL/TLS), Kompresi Zlib, Deteksi Perubahan File, dan GUI Modern
 
 ## Deskripsi Singkat
 
-Project ini membuat aplikasi client-server untuk menyinkronkan file dari folder lokal client ke folder server. Client membaca isi folder lokal, mendeteksi file baru atau file yang berubah menggunakan hash SHA-256, lalu mengirimkan file tersebut ke server melalui TCP Socket. Server menerima file, menyimpannya berdasarkan identitas client, dan mencatat semua aktivitas sinkronisasi ke file log CSV.
+Project ini membuat aplikasi *client-server* canggih untuk menyinkronkan file secara dua arah (*Two-Way Sync*) antara direktori lokal klien dan direktori pusat peladen (server). Dilengkapi antarmuka grafis (GUI) modern, Klien secara otomatis membandingkan metadata dan *Hash MD5* dari sistem lokal dengan data peladen. Hanya file yang benar-benar baru atau berubah yang akan diunggah (*Upload*) atau diunduh (*Download*) melalui jalur TCP Socket yang dienkripsi menggunakan SSL/TLS. Server mampu menangani ratusan klien sekaligus dengan arsitektur *ThreadPool*, menyimpan data berdasarkan identitas unik setiap klien, serta mengamankan riwayat penghapusan (*versioning*) ke dalam folder karantina. Seluruh lalu lintas aktivitas tercatat rapi ke dalam log.
 
 ## Tujuan
 
-1. Menerapkan konsep client-server pada pemrograman jaringan.
-2. Menggunakan TCP Socket sebagai media komunikasi antar aplikasi.
-3. Menunjukkan proses transfer file yang andal menggunakan TCP.
-4. Menerapkan konsep resource sharing dalam jaringan.
-5. Membuat pencatatan aktivitas jaringan melalui file log.
+1. Menerapkan arsitektur dan konsep *client-server* modern pada pemrograman jaringan.
+2. Memanfaatkan TCP Socket sebagai tulang punggung transportasi aliran data file (biner) lintas perangkat.
+3. Menciptakan skema *Two-Way Synchronization* yang cerdas, efisien (dengan kompresi Zlib), dan kebal putus-nyambung (*Resume Transfer*).
+4. Mengamankan pertukaran privasi data melalui lapisan Transport Layer Security (TLS/SSL).
+5. Menerapkan konsep *resource sharing* multiklien tanpa mogok (menggunakan *Threading/ThreadPool*).
 
 ## Batasan Project
 
-1. Sinkronisasi dilakukan dari client ke server.
-2. File yang dikirim adalah file baru atau file yang mengalami perubahan.
-3. Deteksi perubahan file menggunakan ukuran file, waktu modifikasi, dan hash SHA-256.
-4. Sistem melakukan mirroring sinkronisasi, yaitu menghapus file di server secara otomatis jika file di client dihapus.
-5. Sistem diuji pada localhost atau jaringan lokal/LAN.
+1. Klien memiliki wewenang untuk meminta daftar status (*Manifest*) dari Server untuk kalkulasi selisih data.
+2. Proses pengiriman dan penerimaan (Sinkronisasi Dua Arah) dibatasi hanya pada file yang dikalkulasi sebagai "baru", "berubah", atau "terhapus".
+3. Identifikasi kebaruan (*diffing*) dinilai dari kombinasi Ukuran File (*Size*), Waktu Modifikasi (*MTime*), dan Sidik Jari Kriptografis (*Hash MD5*).
+4. File yang tertimpa (*conflict*) atau terhapus (*deleted*) oleh pengguna tidak langsung dihancurkan, melainkan dipindahkan ke sub-folder karantina `_versions/` di sisi server.
+5. Sistem dan modul keamanan SSL dapat diuji secara bebas (*Self-Signed*) pada localhost (127.0.0.1) maupun melintasi Local Area Network (LAN).
 
 ## Alur Kerja Sistem
 
-1. Server dijalankan dan membuka port tertentu.
-2. Client membaca seluruh file dalam folder lokal.
-3. Client membuat data manifest berisi path file, ukuran file, waktu modifikasi, dan hash SHA-256.
-4. Client membandingkan manifest saat ini dengan manifest sebelumnya.
-5. File baru atau berubah dikirim ke server.
-6. Server menerima metadata file dari client.
-7. Server mengecek apakah file sudah pernah diterima dengan hash yang sama.
-8. Jika belum ada atau berubah, server meminta client mengirim isi file.
-9. Server menyimpan file ke folder `server_storage/<client_id>/`.
-10. Server mencatat aktivitas ke `logs/sync_log.csv`.
-11. Client menyimpan manifest terbaru ke `.sync_state.json`.
+1. **Inisialisasi Server:** Server `server.py` dijalankan. Server menyiapkan kunci SSL, menciptakan folder dasar `server_storage/` dan memantik *ThreadPoolExecutor* berkapasitas tinggi, lalu mendengarkan koneksi (*Listening*).
+2. **Inisialisasi Klien:** Pengguna menjalankan antarmuka grafis `client_gui.py`, memasukkan alamat IP Server serta ID Klien unik miliknya, lalu menekan "Start Sync".
+3. **Pertukaran Manifest:** Melalui jalur TCP SSL, Klien meminta peta (*Manifest*) file yang saat ini dipegang oleh Server untuk client tersebut.
+4. **Kalkulasi Data Lokal:** Klien meramban folder lokalnya (mengabaikan file dari daftar hitam `.syncignore`), lalu menghitung ulang nilai MD5 setiap file.
+5. **Eksekusi 3-Cabang (Upload/Download/Delete):** 
+   - **Upload:** File lokal yang lebih baru atau belum ada di Server akan dikompresi (Zlib) dan dikirim ke Server secara terpotong (*Chunk*). Jika putus, proses bisa diteruskan (*Resume*).
+   - **Download:** File di Server yang ternyata lebih baru atau belum ada di sisi Klien akan ditarik (diunduh) turun ke penyimpanan lokal.
+   - **Delete/Versioning:** File yang hilang di sisi Klien akan dikonfirmasi sebagai "Terhapus", memaksa Server menyingkirkan file salinannya ke direktori rahasia `_versions/`.
+6. **Finalisasi:** Setelah seluruh antrean terproses, koneksi diputus, Klien menyimpan memori riwayat sukses di dalam `.sync_state.json`.
 
 ## Materi Pemrograman Jaringan yang Digunakan
 
-### 1. TCP
-
-TCP digunakan karena project ini membutuhkan pengiriman file yang andal. Dalam transfer file, data harus sampai secara utuh, berurutan, dan tidak boleh hilang.
+### 1. TCP (Transmission Control Protocol)
+Sifat pengiriman TCP yang *Reliable*, *In-Order*, dan *Error-Checked* sangat krusial dalam pertukaran *blob* data biner (file dokumen, gambar, dll). Jika ada byte yang tertinggal dalam proses *Upload* / *Download*, file otomatis terkorupsi (rusak). Oleh karenanya UDP sama sekali tidak cocok dipakai di sini.
 
 ### 2. Socket Programming
 
@@ -64,30 +61,16 @@ Konsep NOS berkaitan dengan server yang melayani permintaan client, pengelolaan 
 
 | No | Skenario | Langkah | Hasil yang Diharapkan |
 |---|---|---|---|
-| 1 | Sinkronisasi awal | Jalankan server dan client | Semua file di folder client terkirim ke server |
-| 2 | File baru | Tambahkan file baru, jalankan client lagi | Hanya file baru yang terkirim |
-| 3 | File berubah | Ubah isi file, jalankan client lagi | File yang berubah terkirim ulang |
-| 4 | File tidak berubah | Jalankan client tanpa perubahan | File dilewati atau tidak dikirim ulang |
-| 5 | Logging | Cek `logs/sync_log.csv` | Log berisi nama file, ukuran, waktu, dan status |
-| 6 | Multi-client | Jalankan client dengan client_id berbeda | Server menyimpan file di folder client yang berbeda |
+| 1 | File Upload Lokal | Buat file baru di sisi Klien, klik *Start Sync* | File otomatis terbaca sebagai `UPLOAD` dan berhasil diamankan ke Server |
+| 2 | File Download Server | Letakkan file manual di direktori Server, klik Klien *Start Sync* | File otomatis terbaca sebagai `DOWNLOAD` dan ditarik turun meramaikan direktori Klien |
+| 3 | File Dihapus (Klien) | Hapus sebuah file di Klien, jalankan Sinkronisasi | Server memindahkan file tersebut ke folder `_versions/`, bukannya langsung membuangnya |
+| 4 | Kinerja Bandwidth Sempit | Sinkronisasi dokumen *text/csv* murni yang berukuran masif | Kompresi algoritma *Zlib* memampatkannya hingga 70% lebih ringan sebelum melintas di jalur jaringan |
+| 5 | Koneksi Terputus | Tarik kabel LAN/Matikan internet di tengah `UPLOAD` file 1 GB | Koneksi terputus dengan wajar; Namun saat Klien menekan sinkronisasi lagi, pengiriman tidak diulang dari 0%, melainkan dilanjutkan (*Resume*) |
 
-## Output Project
-
-1. Program server.
-2. Program client.
-3. Folder hasil sinkronisasi di sisi server.
-4. File log aktivitas sinkronisasi.
-5. Tampilan status sinkronisasi pada terminal.
-
-## Kelebihan Project
-
-1. **Modern Client GUI**: Client tidak perlu lagi mengetik perintah di terminal. Disediakan aplikasi Desktop `client_gui.py` berbasis *CustomTkinter* yang sangat cantik, intuitif, mendukung *Dark Mode*, dan *cross-platform*.
-2. **Keamanan SSL/TLS Tingkat Industri**: Saluran komunikasi antara Client dan Server dienkripsi penuh menggunakan Sertifikat SSL. Data tidak bisa disadap (*sniffing*) oleh peretas di jaringan lokal.
-3. Tidak hanya mengirim file biasa, tetapi mendeteksi file baru, file berubah, dan file yang dihapus (Full Mirroring).
-4. Memiliki fitur **File Versioning & Restore** (layaknya Dropbox/Google Drive). Jika file ditimpa atau dihapus, server menyimpannya di folder `_versions`. Client bisa menarik kembali file tersebut lewat menu Restore di aplikasi Desktop.
-5. Menggunakan Zlib Compression pada tingkat *chunk* (potongan data) saat pengiriman lewat socket untuk menghemat bandwidth.
-6. Memiliki fitur Resume Transfer: Jika transfer file besar terputus di tengah jalan, client bisa melanjutkannya tanpa mengulang dari 0%.
-7. Menggunakan TCP Socket murni untuk logika jaringan sehingga sesuai dengan materi lapisan transport.
-8. Ada logging aktivitas berbentuk CSV di sisi Server sehingga lalu lintas jaringan dan aktivitas sinkronisasi dapat ditelusuri (*audit*).
-9. Mendukung banyak client melalui implementasi Threading pada sisi server.
-10. Arsitekturnya berbobot untuk proyek akhir jaringan komputer, namun tetap menggunakan 100% Python tanpa Web Framework eksternal (mengandalkan GUI desktop).
+## Kelebihan Utama Proyek Ini
+1. **Modern Client GUI:** Klien memiliki jendela navigasi berbasis *CustomTkinter* yang intuitif dan elegan dengan implementasi *Dark Mode*.
+2. **Keamanan SSL/TLS:** Seluruh saluran data dienkripsi, mencegah peretasan dan penyadapan jaringan lokal (*Man-in-the-Middle Attacks*).
+3. **Two-Way Sync:** Mampu mengunggah maupun mengunduh file demi menjaga keseimbangan sempurna antar 2 belah pihak layaknya Dropbox.
+4. **File Versioning & Restore:** Tidak mengenal kata hilang berkat fitur karantina internal (`_versions/`).
+5. **Zlib & Resume Transfer:** Super hemat kuota jaringan dan anti-gagal karena bisa disambung.
+6. **Multi-Threaded Server:** Skalabilitas tinggi yang sanggup menghadapi ratusan Klien yang berlomba-lomba mengunggah di detik yang sama.
