@@ -7,6 +7,8 @@ import os
 import threading
 import sys
 import platform
+import pystray
+from PIL import Image, ImageDraw
 
 # Import fungsi-fungsi jaringan dari client.py yang sudah di-refactor
 from client import sync_folder, fetch_versions, restore_file
@@ -35,6 +37,9 @@ class ClientGUI(ctk.CTk):
         
         self.title("File Sync TCP - Modern Client")
         self.geometry("850x600")
+        
+        # Intercept tombol X (Close) untuk diubah menjadi Minimize to Tray
+        self.protocol("WM_DELETE_WINDOW", self.hide_window)
         
         # Grid layout (1 Baris x 2 Kolom)
         self.grid_rowconfigure(0, weight=1)
@@ -304,6 +309,31 @@ class ClientGUI(ctk.CTk):
             self.btn_restore.after(0, lambda: self.btn_restore.configure(state="normal", text="⬇️ Restore File Terpilih"))
             
         threading.Thread(target=restore_t, daemon=True).start()
+
+    def hide_window(self):
+        self.withdraw()
+        
+        # Buat ikon sederhana untuk tray
+        image = Image.new('RGBA', (64, 64), color=(0, 0, 0, 0))
+        d = ImageDraw.Draw(image)
+        d.rounded_rectangle((4, 4, 60, 60), radius=12, fill="#3b82f6")
+        
+        def show_window(icon, item):
+            icon.stop()
+            self.after(0, self.deiconify)
+            
+        def quit_app(icon, item):
+            icon.stop()
+            self.quit()
+            
+        menu = pystray.Menu(
+            pystray.MenuItem('Tampilkan Dashboard', show_window, default=True),
+            pystray.MenuItem('Keluar Sepenuhnya', quit_app)
+        )
+        
+        icon = pystray.Icon("FileSync", image, "File Sync TCP", menu)
+        # Menjalankan icon di thread terpisah agar tidak memblokir auto-sync
+        threading.Thread(target=icon.run, daemon=True).start()
 
 if __name__ == "__main__":
     app = ClientGUI()

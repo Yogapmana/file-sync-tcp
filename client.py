@@ -1,4 +1,5 @@
 import argparse
+import fnmatch
 import hashlib
 import json
 import os
@@ -58,12 +59,32 @@ def scan_folder(folder: Path) -> dict:
     Manifest berisi path relatif, ukuran, waktu modifikasi, dan hash.
     """
     manifest = {}
+    
+    ignore_patterns = []
+    syncignore_path = folder / ".syncignore"
+    if syncignore_path.exists():
+        with open(syncignore_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    ignore_patterns.append(line)
 
     for path in folder.rglob("*"):
         if not path.is_file():
             continue
 
-        if path.name == STATE_FILE:
+        if path.name == STATE_FILE or path.name == ".syncignore":
+            continue
+
+        rel_path = path.relative_to(folder).as_posix()
+        
+        is_ignored = False
+        for pattern in ignore_patterns:
+            if fnmatch.fnmatch(rel_path, pattern) or fnmatch.fnmatch(path.name, pattern):
+                is_ignored = True
+                break
+                
+        if is_ignored:
             continue
 
         rel_path = path.relative_to(folder).as_posix()
@@ -78,39 +99,73 @@ def scan_folder(folder: Path) -> dict:
     return manifest
 
 
-def get_changed_files(current_manifest: dict, previous_state: dict, force: bool = False) -> tuple[dict, dict]:
-    changed = {"upload": [], "delete": []}
-    next_state = current_manifest.copy()
+def get_changed_files(current_manifest: dict, previous_state: dict, server_manifest: dict, force: bool = False) -> tuple[dict, list]:
+    changed = {"upload": [], "download": [], "delete_remote": [], "delete_local": [], "conflict": []}
+    cooldown_files = []
 
     now = time.time()
     COOLDOWN_SECONDS = 5
-
-    for rel_path, info in current_manifest.items():
-        old_info = previous_state.get(rel_path)
-        is_changed = False
+    
+    all_files = set(current_manifest.keys()) | set(previous_state.keys()) | set(server_manifest.keys())
+    
+    for rel_path in all_files:
+        local_info = current_manifest.get(rel_path)
+        prev_info = previous_state.get(rel_path)
+        server_info = server_manifest.get(rel_path)
         
-        if force:
-            is_changed = True
-        elif old_info is None:
-            is_changed = True
-        elif old_info.get("sha256") != info.get("sha256"):
-            is_changed = True
+        local_hash = local_info.get("sha256") if local_info else None
+        prev_hash = prev_info.get("sha256") if prev_info else None
+        server_hash = server_info.get("sha256") if server_info else None
+        
+        modified_locally = False
+        if local_info:
+            if not prev_info or local_hash != prev_hash:
+                modified_locally = True
+                
+        modified_server = False
+        if server_info:
+            if not prev_info or server_hash != prev_hash:
+                modified_server = True
+                
+        deleted_locally = (prev_info is not None) and (local_info is None)
+        deleted_server = (prev_info is not None) and (server_info is None)
+        
+        if force and local_info:
+            changed["upload"].append(rel_path)
+            continue
             
-        if is_changed:
-            if (now - info["mtime"]) < COOLDOWN_SECONDS:
-                if old_info is not None:
-                    next_state[rel_path] = old_info
-                else:
-                    del next_state[rel_path]
+        if modified_locally and modified_server:
+            if local_hash == server_hash:
+                continue
+            changed["conflict"].append(rel_path)
+            
+        elif modified_locally and deleted_server:
+            if (now - local_info["mtime"]) < COOLDOWN_SECONDS:
                 print(f"[COOLDOWN] Menunda sinkronisasi '{rel_path}' karena masih diedit...")
+                cooldown_files.append(rel_path)
             else:
                 changed["upload"].append(rel_path)
+                
+        elif deleted_locally and modified_server:
+            changed["download"].append(rel_path)
+            
+        elif modified_locally:
+            if (now - local_info["mtime"]) < COOLDOWN_SECONDS:
+                print(f"[COOLDOWN] Menunda sinkronisasi '{rel_path}' karena masih diedit...")
+                cooldown_files.append(rel_path)
+            else:
+                changed["upload"].append(rel_path)
+                
+        elif modified_server:
+            changed["download"].append(rel_path)
+            
+        elif deleted_locally:
+            changed["delete_remote"].append(rel_path)
+                
+        elif deleted_server:
+            changed["delete_local"].append(rel_path)
 
-    for rel_path in previous_state.keys():
-        if rel_path not in current_manifest:
-            changed["delete"].append(rel_path)
-
-    return changed, next_state
+    return changed, cooldown_files
 
 
 def print_progress(filename: str, sent: int, total: int) -> None:
@@ -125,6 +180,48 @@ def print_progress(filename: str, sent: int, total: int) -> None:
 
     print(f"\rMengirim {filename} [{bar}] {percent}% ({format_size(sent)}/{format_size(total)})", end="")
 
+
+def download_file(sock: socket.socket, folder: Path, client_id: str, rel_path: str) -> str:
+    metadata = {
+        "action": "DOWNLOAD",
+        "client_id": client_id,
+        "rel_path": rel_path
+    }
+    send_json(sock, metadata)
+    response = recv_json(sock)
+    
+    if response.get("status") != "SUCCESS":
+        print(f"[GAGAL] Download {rel_path} - {response.get('reason')}")
+        return "FAILED"
+        
+    size = response.get("filesize", 0)
+    full_path = folder / rel_path
+    full_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    received = 0
+    start_time = time.time()
+    tmp_path = full_path.with_suffix(full_path.suffix + ".tmp_dl")
+    
+    with tmp_path.open("wb") as f:
+        while received < size:
+            chunk = recv_compressed_chunk(sock)
+            if not chunk:
+                break
+            f.write(chunk)
+            received += len(chunk)
+            print_progress(rel_path, received, size)
+            
+    print()
+    if received == size:
+        tmp_path.replace(full_path)
+        elapsed = max(time.time() - start_time, 0.0001)
+        speed = received / elapsed
+        print(f"[OK] {rel_path} berhasil diunduh. Kecepatan: {format_size(int(speed))}/s")
+        return "OK"
+    else:
+        tmp_path.unlink(missing_ok=True)
+        print(f"[GAGAL] {rel_path} ukuran tidak sesuai (Diterima: {received}/{size})")
+        return "FAILED"
 
 def send_file(sock: socket.socket, folder: Path, client_id: str, rel_path: str, info: dict) -> str:
     full_path = folder / rel_path
@@ -188,24 +285,121 @@ def send_file(sock: socket.socket, folder: Path, client_id: str, rel_path: str, 
 def sync_folder(server_host: str, server_port: int, folder: Path, client_id: str, force: bool = False, watch_mode: bool = False) -> None:
     if not folder.exists():
         raise FileNotFoundError(f"Folder tidak ditemukan: {folder}")
-
     if not folder.is_dir():
         raise NotADirectoryError(f"Path bukan folder: {folder}")
 
-    previous_state = load_state(folder)
-    current_manifest = scan_folder(folder)
-    changed_files, next_state = get_changed_files(current_manifest, previous_state, force=force)
-
-    total_changes = len(changed_files["upload"]) + len(changed_files["delete"])
-
-    if watch_mode and total_changes == 0:
+    sock = connect_to_server(server_host, server_port)
+    if not sock:
+        print("Sinkronisasi dibatalkan karena gagal terhubung ke server.")
         return
 
+    with sock:
+        send_json(sock, {"action": "GET_MANIFEST", "client_id": client_id})
+        resp = recv_json(sock)
+        if resp.get("status") == "SUCCESS":
+            server_manifest = resp.get("manifest", {})
+        else:
+            print("Gagal mengambil manifest dari server.")
+            server_manifest = {}
+            
+        previous_state = load_state(folder)
+        current_manifest = scan_folder(folder)
+        
+        changed_files, cooldown_files = get_changed_files(current_manifest, previous_state, server_manifest, force=force)
+
+        # Tangani file conflict
+        for rel_path in changed_files["conflict"]:
+            full_path = folder / rel_path
+            if full_path.exists():
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                conflict_name = f"{full_path.stem}_conflict_{timestamp}{full_path.suffix}"
+                conflict_path = full_path.with_name(conflict_name)
+                full_path.rename(conflict_path)
+                print(f"[CONFLICT] Menyimpan file lokal ke {conflict_name}")
+            changed_files["download"].append(rel_path)
+
+        total_changes = len(changed_files["upload"]) + len(changed_files["delete_remote"]) + len(changed_files["download"]) + len(changed_files["delete_local"])
+        if watch_mode and total_changes == 0:
+            send_json(sock, {"action": "FINISH", "client_id": client_id})
+            recv_json(sock)
+            return
+
+        print("=" * 60)
+        print("CLIENT SINKRONISASI FILE TCP (TWO-WAY SYNC)")
+        print(f"Server: {server_host}:{server_port}")
+        print(f"Folder client: {folder.resolve()}")
+        print(f"Client ID: {client_id}")
+        print("=" * 60)
+        
+        if total_changes == 0:
+            print("Tidak ada file baru, diubah, atau dihapus. Sinkronisasi tidak diperlukan.")
+            send_json(sock, {"action": "FINISH", "client_id": client_id})
+            recv_json(sock)
+            return
+
+        success_count = 0
+        skip_count = 0
+        failed_count = 0
+        delete_remote_count = 0
+        delete_local_count = 0
+        download_count = 0
+        
+        # Eksekusi Delete Lokal
+        for rel_path in changed_files["delete_local"]:
+            full_path = folder / rel_path
+            if full_path.exists():
+                full_path.unlink()
+                print(f"[DELETE LOKAL] {rel_path} berhasil dihapus.")
+                delete_local_count += 1
+                
+        # Eksekusi Delete Remote
+        for rel_path in changed_files["delete_remote"]:
+            send_json(sock, {"action": "DELETE", "client_id": client_id, "rel_path": rel_path})
+            r = recv_json(sock)
+            if r.get("status") == "OK":
+                print(f"[DELETE REMOTE] {rel_path} berhasil dihapus dari server.")
+                delete_remote_count += 1
+            else:
+                print(f"[GAGAL] Menghapus remote {rel_path}: {r.get('message')}")
+                
+        # Eksekusi Upload
+        for rel_path in changed_files["upload"]:
+            result = send_file(sock, folder, client_id, rel_path, current_manifest[rel_path])
+            if result == "OK":
+                success_count += 1
+            elif result == "SKIP":
+                skip_count += 1
+            else:
+                failed_count += 1
+                
+        # Eksekusi Download
+        for rel_path in changed_files["download"]:
+            result = download_file(sock, folder, client_id, rel_path)
+            if result == "OK":
+                download_count += 1
+            else:
+                failed_count += 1
+
+        send_json(sock, {"action": "FINISH", "client_id": client_id})
+        finish_response = recv_json(sock)
+        print(f"Server: {finish_response.get('message')}")
+
+    # Update State
+    final_manifest = scan_folder(folder)
+    for f in cooldown_files:
+        if f in previous_state:
+            final_manifest[f] = previous_state[f]
+            
+    save_state(folder, final_manifest)
+
     print("=" * 60)
-    print("CLIENT SINKRONISASI FILE TCP")
-    print(f"Server: {server_host}:{server_port}")
-    print(f"Folder client: {folder.resolve()}")
-    print(f"Client ID: {client_id}")
+    print("RINGKASAN SINKRONISASI")
+    print(f"Diunggah      : {success_count}")
+    print(f"Diunduh       : {download_count}")
+    print(f"Dihapus Lokal : {delete_local_count}")
+    print(f"Dihapus Server: {delete_remote_count}")
+    print(f"Dilewati      : {skip_count}")
+    print(f"Gagal         : {failed_count}")
     print("=" * 60)
 
     print(f"Total file di folder: {len(current_manifest)}")

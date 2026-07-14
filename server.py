@@ -191,7 +191,12 @@ def handle_client(sock: socket.socket, address: tuple[str, int]) -> None:
                 action = message.get("action")
                 client_id = message.get("client_id", "unknown_client")
 
-                if action == "UPLOAD":
+                if action == "GET_MANIFEST":
+                    client_dir = STORAGE_DIR / client_id
+                    manifest = load_manifest(client_dir)
+                    send_json(sock, {"status": "SUCCESS", "manifest": manifest})
+
+                elif action == "UPLOAD":
                     handle_upload(sock, client_ip, message)
 
                 elif action == "DELETE":
@@ -253,6 +258,29 @@ def handle_client(sock: socket.socket, address: tuple[str, int]) -> None:
                     target_file = versions_dir / filename
                     
                     if not target_file.exists():
+                        send_json(sock, {"status": "FAILED", "reason": "File not found"})
+                        continue
+                        
+                    file_size = target_file.stat().st_size
+                    send_json(sock, {"status": "SUCCESS", "filesize": file_size})
+                    
+                    with target_file.open("rb") as f:
+                        while True:
+                            chunk = f.read(BUFFER_SIZE)
+                            if not chunk:
+                                break
+                            send_compressed_chunk(sock, chunk)
+                    send_compressed_chunk(sock, b"")
+
+                elif action == "DOWNLOAD":
+                    rel_path = message.get("rel_path")
+                    if not rel_path:
+                        continue
+                        
+                    client_dir = STORAGE_DIR / client_id
+                    target_file = safe_join(client_dir, rel_path)
+                    
+                    if not target_file.exists() or not target_file.is_file():
                         send_json(sock, {"status": "FAILED", "reason": "File not found"})
                         continue
                         
