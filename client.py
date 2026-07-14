@@ -78,24 +78,39 @@ def scan_folder(folder: Path) -> dict:
     return manifest
 
 
-def get_changed_files(current_manifest: dict, previous_state: dict, force: bool = False) -> dict:
+def get_changed_files(current_manifest: dict, previous_state: dict, force: bool = False) -> tuple[dict, dict]:
     changed = {"upload": [], "delete": []}
+    next_state = current_manifest.copy()
+
+    now = time.time()
+    COOLDOWN_SECONDS = 5
 
     for rel_path, info in current_manifest.items():
         old_info = previous_state.get(rel_path)
-
+        is_changed = False
+        
         if force:
-            changed["upload"].append(rel_path)
+            is_changed = True
         elif old_info is None:
-            changed["upload"].append(rel_path)
+            is_changed = True
         elif old_info.get("sha256") != info.get("sha256"):
-            changed["upload"].append(rel_path)
+            is_changed = True
             
+        if is_changed:
+            if (now - info["mtime"]) < COOLDOWN_SECONDS:
+                if old_info is not None:
+                    next_state[rel_path] = old_info
+                else:
+                    del next_state[rel_path]
+                print(f"[COOLDOWN] Menunda sinkronisasi '{rel_path}' karena masih diedit...")
+            else:
+                changed["upload"].append(rel_path)
+
     for rel_path in previous_state.keys():
         if rel_path not in current_manifest:
             changed["delete"].append(rel_path)
 
-    return changed
+    return changed, next_state
 
 
 def print_progress(filename: str, sent: int, total: int) -> None:
@@ -179,7 +194,7 @@ def sync_folder(server_host: str, server_port: int, folder: Path, client_id: str
 
     previous_state = load_state(folder)
     current_manifest = scan_folder(folder)
-    changed_files = get_changed_files(current_manifest, previous_state, force=force)
+    changed_files, next_state = get_changed_files(current_manifest, previous_state, force=force)
 
     total_changes = len(changed_files["upload"]) + len(changed_files["delete"])
 
@@ -237,7 +252,7 @@ def sync_folder(server_host: str, server_port: int, folder: Path, client_id: str
         print(f"Server: {finish_response.get('message')}")
 
     # State tetap disimpan supaya file yang tidak berubah tidak dikirim ulang.
-    save_state(folder, current_manifest)
+    save_state(folder, next_state)
 
     print("=" * 60)
     print("RINGKASAN SINKRONISASI")
