@@ -1,120 +1,84 @@
-# Sistem Sinkronisasi File Client-Server Menggunakan TCP Socket
+# Sistem Sinkronisasi File Client-Server Menggunakan TCP Socket (Enterprise-Grade)
 
-Project ini adalah aplikasi sederhana untuk menyinkronkan file dari folder client ke folder server melalui jaringan menggunakan TCP Socket.
+Proyek ini adalah aplikasi tangguh (*robust*) untuk menyinkronkan file dua arah (*Two-Way Sync*) antara client dan server melalui jaringan menggunakan protokol TCP. Sistem ini telah disempurnakan dengan standar praktik industri terbaik (*Best Practices*), menjadikannya lebih dari sekadar tugas kuliah—ini adalah miniatur *Cloud Storage* (seperti Google Drive/Dropbox) yang sesungguhnya!
 
-## Fitur Utama
+## 🚀 Fitur Utama & Keunggulan
 
-1. Client membaca isi folder lokal.
-2. Client mendeteksi file baru atau file yang berubah.
-3. File dikirim ke server menggunakan TCP.
-4. Server menerima dan menyimpan file hasil sinkronisasi.
-5. Server mencatat log sinkronisasi berisi:
-   - waktu sinkronisasi
-   - IP client
-   - client_id
-   - nama file
-   - ukuran file
-   - status sinkronisasi
-   - keterangan
-6. Client menampilkan status berhasil, gagal, atau file dilewati.
-7. Server mendukung banyak client menggunakan threading.
-8. File disimpan di folder server berdasarkan client_id.
+1. **Two-Way Synchronization (Sinkronisasi Dua Arah)**
+   Perubahan di *Client* akan di-*push* ke *Server*, dan perubahan di *Server* akan di-*pull* ke *Client*. Jika ada perubahan di waktu yang sama, sistem otomatis menangani **Conflict** tanpa menghapus file asli.
+   
+2. **Modern GUI & Background Tray 🖥️**
+   Tersedia aplikasi Desktop modern `client_gui.py` berbasis *CustomTkinter*. Aplikasi ini bisa berjalan di latar belakang (System Tray) untuk melakukan **Auto-Sync** setiap 10 detik tanpa mengganggu pekerjaan Anda.
 
-## Materi yang Digunakan
+3. **Keamanan SSL/TLS 🔐**
+   Semua lalu lintas data antara Client dan Server dienkripsi penuh menggunakan SSL/TLS. *Client* melakukan validasi sertifikat (`CERT_REQUIRED`) untuk mencegah serangan *Man-in-the-Middle (MitM)*.
 
-- TCP Socket
-- Client-Server
-- Socket Programming
-- Resource Sharing
-- Network Operating System
-- Logging aktivitas jaringan
+4. **File Versioning & Pusat Restore ♻️**
+   Jika file ditimpa atau dihapus, Server tidak langsung menghilangkannya secara permanen. File tersebut diamankan ke dalam folder `_versions`. Client dapat melihat riwayat versi dan me-*restore* file lama dengan satu klik via GUI.
 
-## Struktur Folder
+5. **Dukungan .syncignore 🚫**
+   Sama seperti `.gitignore`, Anda dapat membuat file `.syncignore` di folder client agar file-file sampah, *build folder*, atau data rahasia tidak ikut terunggah ke server.
+
+6. **Resume Transfer & Zlib Compression ⚡**
+   Jika koneksi terputus saat mentransfer file berukuran 10GB, transfer dapat dilanjutkan (*resume*) dari titik terakhirnya. File juga dikompresi (Zlib) secara *on-the-fly* agar hemat kuota/bandwidth.
+
+7. **Performa Tinggi (Thread Pooling) 🏎️**
+   Server menggunakan arsitektur `ThreadPoolExecutor` dan tidak akan mati kehabisan memori meskipun diserang oleh ribuan koneksi masuk secara bersamaan. Log dicatat dengan rapi menggunakan modul profesional `logging` ke file `logs/server.log`.
+
+---
+
+## 📂 Struktur Direktori
 
 ```text
 file-sync-tcp-project/
-├── client.py
-├── server.py
-├── common.py
-├── requirements.txt
-├── README.md
-├── PENJELASAN_PROJECT.md
-├── client_files/
-│   └── contoh.txt
-├── server_storage/
-└── logs/
+├── client_gui.py       # Aplikasi GUI Desktop Client (Modern)
+├── client.py           # Core Logika Client Jaringan TCP & Sync
+├── server.py           # Core Logika Server TCP Multi-Thread
+├── common.py           # Modul helper dan konstanta
+├── requirements.txt    # Daftar dependensi Python
+├── .syncignore         # Daftar file/folder yang diabaikan client
+├── .gitignore          # File untuk mengabaikan server.key/crt di Git
+├── server.crt          # Sertifikat SSL Publik Server
+├── server.key          # Kunci Privat SSL Server (JANGAN DI-SHARE!)
+├── client_files/       # (Contoh) Folder target sinkronisasi di client
+├── server_storage/     # Lokasi server menyimpan data per client
+└── logs/               # Lokasi penyimpanan log aktivitas
 ```
 
-## Cara Menjalankan
+---
 
-### 1. Jalankan Server
+## 🛠️ Cara Menjalankan
 
-Buka terminal pertama:
+### Persiapan SSL (Wajib untuk Keamanan)
+Agar komunikasi aman, pastikan Anda telah men-generate sertifikat SSL lokal (Self-Signed) di folder proyek:
+```bash
+openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 -nodes
+```
+> **Catatan:** Jangan pernah meng-upload file `server.key` ke GitHub!
 
+### 1. Menjalankan Server
+Buka terminal dan jalankan server (secara default *listening* di `0.0.0.0:5001`):
 ```bash
 python server.py
 ```
+*Server akan otomatis membuat folder `server_storage` dan `logs/` jika belum ada.*
 
-Default server berjalan di:
-
-```text
-0.0.0.0:5001
-```
-
-### 2. Jalankan Client
-
-Buka terminal kedua:
-
+### 2. Menjalankan Client GUI (Direkomendasikan)
+Cara termudah menggunakan aplikasi ini adalah melalui Antarmuka Desktop:
 ```bash
-python client.py --server 127.0.0.1 --folder client_files --client-id client01
+python client_gui.py
 ```
+Di GUI ini Anda bisa memasukkan IP Server, ID Client, memilih folder, mengaktifkan **Auto-Sync**, dan me-*restore* file dari sampah/versi lama.
 
-Jika menggunakan dua laptop dalam satu Wi-Fi/LAN, ganti `127.0.0.1` dengan IP laptop yang menjalankan server.
-
-Contoh:
-
+### 3. Menjalankan Client via Terminal (CLI Mode)
+Jika Anda hanya punya akses terminal (misal di server headless Linux):
 ```bash
-python client.py --server 192.168.1.10 --folder client_files --client-id laptop_rafie
+python client.py --server 127.0.0.1 --folder client_files --client-id laptop_rafie
 ```
+- Gunakan `--force` jika ingin memaksa sinkronisasi/upload ulang mengabaikan cache.
+- Ganti `127.0.0.1` dengan IP lokal Server jika menggunakan dua perangkat beda dalam 1 jaringan Wi-Fi/LAN.
 
-## Cara Demo untuk Presentasi
+---
 
-1. Jalankan `server.py`.
-2. Jalankan `client.py`.
-3. File dari `client_files` akan masuk ke `server_storage/client01`.
-4. Tambahkan file baru ke folder `client_files`.
-5. Jalankan `client.py` lagi.
-6. Sistem hanya mengirim file baru atau file yang berubah.
-7. Cek log di `logs/sync_log.csv`.
-
-## Command Tambahan
-
-### Mengganti port server
-
-Server:
-
-```bash
-python server.py --host 0.0.0.0 --port 6000
-```
-
-Client:
-
-```bash
-python client.py --server 127.0.0.1 --port 6000 --folder client_files --client-id client01
-```
-
-### Memaksa kirim semua file
-
-```bash
-python client.py --server 127.0.0.1 --folder client_files --client-id client01 --force
-```
-
-## Catatan Tambahan (Fitur Lanjutan)
-
-Project ini kini dilengkapi dengan fitur:
-- **Modern Client GUI (Baru!)**: Disediakan aplikasi Desktop `client_gui.py` berbasis *CustomTkinter* untuk mempermudah sinkronisasi dan manajemen file.
-- **Keamanan SSL/TLS**: Enkripsi penuh layaknya HTTPS, mencegah data disadap oleh peretas di jaringan lokal.
-- **File Versioning & Restore**: File lama disimpan di `_versions` saat ditimpa atau dihapus. Anda bisa melakukan *Restore* dengan mudah melalui tab "Restore Center" di Client GUI.
-- **Mirroring (Hapus Sinkron)**: Jika file dihapus di client, file akan terhapus di server (masuk ke `_versions`).
-- **Zlib Compression** untuk efisiensi jaringan
-- **Resume Transfer** yang memungkinkan pengiriman file dilanjutkan tanpa harus mengulang dari awal jika terjadi putus koneksi.
+## 🤝 Kontribusi & Kustomisasi
+Proyek ini dibangun dari dasar menggunakan raw `socket` di Python. Anda sangat diperbolehkan untuk melakukan modifikasi seperti menambahkan antarmuka Web Dashboard untuk admin server, atau menambahkan sistem Login Database bagi client.

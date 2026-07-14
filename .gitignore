@@ -5,3 +5,7 @@ client_files/
 .venv/
 venv/
 *.pyc
+
+# SSL Certificates
+*.key
+*.crt
