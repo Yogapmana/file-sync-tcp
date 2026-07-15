@@ -241,20 +241,60 @@ class ClientGUI(ctk.CTk):
 
         def sync_thread():
             import time
-            while self.is_syncing:
+            from watchdog.observers import Observer
+            from watchdog.events import FileSystemEventHandler
+
+            class SyncHandler(FileSystemEventHandler):
+                def __init__(self, parent_gui):
+                    self.parent_gui = parent_gui
+
+                def on_any_event(self, event):
+                    if event.is_directory:
+                        return
+                    from pathlib import Path
+                    name = Path(event.src_path).name
+                    # Abaikan file internal
+                    if name in [".sync_state.json", ".syncignore"] or name.endswith(".tmp_dl") or name.startswith("_"):
+                        return
+                    self.parent_gui.needs_sync = True
+
+            self.needs_sync = True
+            observer = None
+            
+            if is_auto:
                 try:
-                    sync_folder(host, port, folder, client_id, force=False, watch_mode=is_auto)
+                    handler = SyncHandler(self)
+                    observer = Observer()
+                    observer.schedule(handler, str(folder), recursive=True)
+                    observer.start()
                 except Exception as e:
-                    logging.error(f"Error saat sinkronisasi: {e}")
-                
-                if not is_auto:
-                    self.is_syncing = False
-                    break
-                
-                # Jeda 2 detik (menggunakan loop kecil agar cepat berhenti jika tombol diklik)
-                for _ in range(10):
-                    if not self.is_syncing: break
-                    time.sleep(0.2)
+                    logging.warning(f"Gagal memulai watchdog: {e}")
+
+            try:
+                last_sync_time = 0
+                poll_interval = 5  # Cek server setiap 5 detik sebagai fallback
+
+                while self.is_syncing:
+                    current_time = time.time()
+                    
+                    if self.needs_sync or (current_time - last_sync_time > poll_interval):
+                        self.needs_sync = False
+                        
+                        try:
+                            sync_folder(host, port, folder, client_id, force=False, watch_mode=is_auto)
+                            last_sync_time = time.time()
+                        except Exception as e:
+                            logging.error(f"Error saat sinkronisasi: {e}")
+
+                        if not is_auto:
+                            self.is_syncing = False
+                            break
+                    
+                    time.sleep(0.5)
+            finally:
+                if observer:
+                    observer.stop()
+                    observer.join()
                     
             if not is_auto:
                 self.btn_sync.after(0, lambda: self.btn_sync.configure(state="normal", text="🚀 Mulai Sinkronisasi\n(Kirim ke Server)"))
