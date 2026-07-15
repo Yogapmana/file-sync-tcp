@@ -480,17 +480,20 @@ def restore_file(server_host: str, server_port: int, client_id: str, filename: s
         response = recv_json(sock)
         
         if response.get("status") == "SUCCESS":
+            size = response.get("filesize", 0)
             original_name = re.sub(r'_\d{8}_\d{6}', '', filename)
             original_name = re.sub(r'_deleted', '', original_name)
             target_path = client_dir / original_name
             target_path.parent.mkdir(parents=True, exist_ok=True)
             
+            received = 0
             with target_path.open("wb") as f:
-                while True:
+                while received < size:
                     chunk = recv_compressed_chunk(sock)
                     if not chunk:
                         break
                     f.write(chunk)
+                    received += len(chunk)
             
             return True
         else:
