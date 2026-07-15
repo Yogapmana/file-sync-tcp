@@ -325,6 +325,11 @@ def sync_folder(server_host: str, server_port: int, folder: Path, client_id: str
                 conflict_path = full_path.with_name(conflict_name)
                 full_path.rename(conflict_path)
                 logging.warning(f"[CONFLICT] Menyimpan file lokal ke {conflict_name}")
+                
+                # Mengupload file conflict ke server agar tidak dianggap terhapus di siklus berikutnya
+                conflict_rel_path = conflict_path.relative_to(folder).as_posix()
+                changed_files["upload"].append(conflict_rel_path)
+                
             changed_files["download"].append(rel_path)
 
         total_changes = len(changed_files["upload"]) + len(changed_files["delete_remote"]) + len(changed_files["download"]) + len(changed_files["delete_local"])
