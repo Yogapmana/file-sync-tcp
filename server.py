@@ -304,7 +304,7 @@ def handle_client(sock: socket.socket, address: tuple[str, int]) -> None:
                             if not chunk:
                                 break
                             send_compressed_chunk(sock, chunk)
-                    send_compressed_chunk(sock, b"")
+                    # send_compressed_chunk(sock, b"")
 
                 elif action == "DOWNLOAD":
                     rel_path = message.get("rel_path")
@@ -327,7 +327,7 @@ def handle_client(sock: socket.socket, address: tuple[str, int]) -> None:
                             if not chunk:
                                 break
                             send_compressed_chunk(sock, chunk)
-                    send_compressed_chunk(sock, b"")
+                    # send_compressed_chunk(sock, b"")
 
                 elif action == "FINISH":
                     send_json(sock, {"status": "OK", "message": "Sinkronisasi selesai."})
